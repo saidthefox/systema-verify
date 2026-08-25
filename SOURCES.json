@@ -105,7 +105,7 @@
     "rulesets/ee7e5c4efce9f9fa4e70ac5bba5e6ecda9e26a75b5d8a71598b42bd985b861cb/src/core/types.ts": "15dd8e3adc6fd9bec541467c1c4042573e6f124e058aef20355fbd0c97369d84",
     "rulesets/ee7e5c4efce9f9fa4e70ac5bba5e6ecda9e26a75b5d8a71598b42bd985b861cb/src/core/verify.ts": "1ff71895d7d59cd0486d1ef4a352c49024bf291f8744564156e9c132ba8bed20",
     "src/codec.ts": "79c846de1fe87aa30fe07d602f328ac7d2f570655f1ad831c4a4b57217a25cbc",
-    "src/verifier/ruleset-resolver.ts": "b7143eeac1749462689c405e59b85230fbeb5929cdadd390f7f782cbb6bddade",
+    "src/verifier/ruleset-resolver.ts": "a7d853fa1a4b4721b4f40a3a500357eff7888043e7b1111ffe3bb5e269c6fe53",
     "verify.ts": "9daa13f7e6c8e421e6a1cb0b79dcd863ea224c4d211b68dfac83b51a43446671"
   }
 }
