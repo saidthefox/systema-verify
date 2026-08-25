@@ -1,6 +1,7 @@
 import type { Candidate, CoreState, EventEnvelope, Outcome } from "./types"
 import { canonical, hashOf, sha256, ZERO64 } from "./canonical"
-import { activatePending, applyEvent, fold, initState, validate } from "./reducer"
+import { evolveV1, fold, initState } from "./reducer"
+import { decideV1 } from "./protocol"
 
 /**
  * The sequencer, simulated — orders candidates, stamps seq/ts, hash-chains the envelope
@@ -75,12 +76,11 @@ export class LogSim {
   submit(c: Candidate, ts: string): SubmitResult {
     if (Date.parse(ts) < Date.parse(this.state.ts)) return { accepted: false, reason: "sequencer clock went backwards" }
     if (!this.verifySig(c)) return { accepted: false, reason: "signature verification failed" }
-    activatePending(this.state, this.state.seq + 1) // the candidate is judged under the rules at ITS seq
-    const shaped = { kind: c.kind, v: c.v, actor: c.actor, payload: c.payload, ts }
-    const reason = validate(this.state, shaped)
-    if (reason) return { accepted: false, reason }
-    const event = this.seal({ seq: this.state.seq + 1, ts, kind: c.kind, v: c.v, actor: c.actor, payload: c.payload, sig: c.sig })
-    const outcome = applyEvent(this.state, event)
+    const decision = decideV1(this.state, c, ts)
+    if (!decision.accepted) return { accepted: false, reason: decision.reason }
+    const fact = decision.events[0]
+    const event = this.seal({ seq: this.state.seq + 1, ts, ...fact })
+    const outcome = evolveV1(this.state, event)
     this.events.push(event)
     return { accepted: true, event, outcome }
   }

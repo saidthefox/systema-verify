@@ -693,12 +693,29 @@ function validateVote(state: CoreState, e: EventEnvelope): string | null {
 
 // ── apply ───────────────────────────────────────────────────────────────────
 
-export function applyEvent(state: CoreState, e: EventEnvelope): Outcome {
+/**
+ * Apply a fact without re-deciding whether its command should have been admitted. The live v1
+ * sequencer uses this after decideV1. Future v2 replay will have the same factual boundary, with
+ * its decision proof performed independently under the event's referenced ruleset.
+ */
+export function evolveV1(state: CoreState, e: EventEnvelope): Outcome {
   const notes: string[] = []
   beginFx() // the effects trace opens with the event and rides out on the Outcome
+  activatePending(state, e.seq, notes)
+  return applyAcceptedV1(state, e, notes)
+}
+
+/** Historical compatibility proof: v1 replay re-runs the admission rule before applying. */
+export function applyEvent(state: CoreState, e: EventEnvelope): Outcome {
+  const notes: string[] = []
+  beginFx()
   activatePending(state, e.seq, notes) // rules in force AT this seq, before anything is judged
   const err = e.kind === "GENESIS" ? null : validate(state, e)
   if (err) throw new Error(`invalid event in log at seq ${e.seq}: ${err}`)
+  return applyAcceptedV1(state, e, notes)
+}
+
+function applyAcceptedV1(state: CoreState, e: EventEnvelope, notes: string[]): Outcome {
   const p = e.payload
 
   switch (e.kind) {
