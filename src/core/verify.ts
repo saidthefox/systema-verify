@@ -2,7 +2,7 @@ import { createPublicKey, verify as edVerify } from "crypto"
 import type { Candidate, CoreState, EventEnvelope } from "./types"
 import { hashOf, keyFingerprint, ZERO64 } from "./canonical"
 import { sigPayload } from "./sequencer"
-import { applyEvent, initState } from "./reducer"
+import { applyEvent, evolveV1, initState } from "./reducer"
 import { dialNum } from "./dials"
 
 /**
@@ -51,6 +51,14 @@ export interface LogVerdict {
   failedAt?: number
   reason?: string
   events: number
+  mode: LogVerificationMode
+}
+
+export type LogVerificationMode = "state-replay" | "constitutional-v1"
+
+export interface VerifyLogOptions {
+  sigs?: boolean
+  snapshot?: CoreState
 }
 
 /**
@@ -60,9 +68,9 @@ export interface LogVerdict {
  * GENESIS `systemKeys` roster or self-registering events; an unverifiable signer fails
  * the log, never skips it).
  */
-export function verifyLog(events: EventEnvelope[], opts: { sigs?: boolean; snapshot?: CoreState } = {}): LogVerdict {
-  if (!events.length) return { valid: false, reason: "empty log", events: 0 }
-  const fail = (e: EventEnvelope, reason: string): LogVerdict => ({ valid: false, failedAt: e.seq, reason, events: events.length })
+function verifyInMode(events: EventEnvelope[], opts: VerifyLogOptions, mode: LogVerificationMode): LogVerdict {
+  if (!events.length) return { valid: false, reason: "empty log", events: 0, mode }
+  const fail = (e: EventEnvelope, reason: string): LogVerdict => ({ valid: false, failedAt: e.seq, reason, events: events.length, mode })
 
   let state: CoreState
   try {
@@ -72,7 +80,7 @@ export function verifyLog(events: EventEnvelope[], opts: { sigs?: boolean; snaps
     // very shape it was built to check (found 2026-08-18 running it against a replica).
     state = initState(events[0], opts.snapshot)
   } catch (err) {
-    return { valid: false, failedAt: 0, reason: String(err instanceof Error ? err.message : err), events: events.length }
+    return { valid: false, failedAt: 0, reason: String(err instanceof Error ? err.message : err), events: events.length, mode }
   }
 
   let prev = ZERO64
@@ -98,13 +106,33 @@ export function verifyLog(events: EventEnvelope[], opts: { sigs?: boolean; snaps
     }
     if (e.seq > 0) {
       try {
-        applyEvent(state, e)
+        if (mode === "constitutional-v1") applyEvent(state, e)
+        else evolveV1(state, e)
       } catch (err) {
-        return fail(e, `reducer refused: ${err instanceof Error ? err.message : String(err)}`)
+        const label = mode === "constitutional-v1" ? "reducer refused" : "state replay failed"
+        return fail(e, `${label}: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
     prev = e.hash
     entityHeads.set(e.actor, e.hash)
   }
-  return { valid: true, events: events.length }
+  return { valid: true, events: events.length, mode }
+}
+
+/**
+ * Prove the record envelope, signature era and ability to evolve every recorded fact. This does
+ * not claim that the command behind each v1 fact was admissible; that is a separate proof.
+ */
+export function verifyStateReplay(events: EventEnvelope[], opts: VerifyLogOptions = {}): LogVerdict {
+  return verifyInMode(events, opts, "state-replay")
+}
+
+/** Re-run the frozen protocol-v1 admission law as well as the ordinary record proof. */
+export function verifyConstitutionalLog(events: EventEnvelope[], opts: VerifyLogOptions = {}): LogVerdict {
+  return verifyInMode(events, opts, "constitutional-v1")
+}
+
+/** @deprecated Compatibility name: historically `verifyLog` meant constitutional v1 replay. */
+export function verifyLog(events: EventEnvelope[], opts: VerifyLogOptions = {}): LogVerdict {
+  return verifyConstitutionalLog(events, opts)
 }

@@ -1,8 +1,8 @@
 import { readFileSync, existsSync, readdirSync } from "node:fs"
 import { createHash } from "node:crypto"
 import { join } from "node:path"
-import { fold } from "./src/core/reducer"
-import { verifyLog } from "./src/core/verify"
+import { foldFacts } from "./src/core/reducer"
+import { verifyConstitutionalLog } from "./src/core/verify"
 import { CHAIN_TERMINUS_ACT_ID, stateHashOf } from "./src/core/canonical"
 import { stateFromJson } from "./src/codec"
 import type { EventEnvelope } from "./src/core/types"
@@ -263,7 +263,7 @@ async function verifyPlainDir(dir: string, opts: { rpcUrl: string | null }): Pro
   ok(`read ${events.length} events, head seq ${head.seq} @ ${head.ts}`)
 
   console.log("\n2. the record, the law, the signatures")
-  const v = verifyLog(events, { snapshot: snap() })
+  const v = verifyConstitutionalLog(events, { snapshot: snap() })
   let inconclusive: string | null = null
   if (!v.valid && staleLaw(v.reason)) {
     // Same abstention as the published path — an operator checking their own mirror deserves the
@@ -288,7 +288,8 @@ async function verifyPlainDir(dir: string, opts: { rpcUrl: string | null }): Pro
       continue
     }
     const bounded = events.filter(e => e.seq <= p.seq)
-    const { state } = fold(bounded, snap())
+    // The admission proof above and factual state replay are deliberately different claims.
+    const { state } = foldFacts(bounded, snap())
     failures += await checkAnchor(p, { stateHash: stateHashOf(state), logHash: bounded[bounded.length - 1].hash }, opts)
   }
 
@@ -366,7 +367,7 @@ async function main() {
   // ── 2-4. RECORD, LAW, SIGNATURES ──────────────────────────────────────────
   console.log("\n2. the record, the law, the signatures")
   // initState MUTATES its snapshot, so the fold below gets its own parse.
-  const v = verifyLog(events, { snapshot: manifest.genesis ? stateFromJson((await get(base, manifest.genesis.file)).toString()) : undefined })
+  const v = verifyConstitutionalLog(events, { snapshot: manifest.genesis ? stateFromJson((await get(base, manifest.genesis.file)).toString()) : undefined })
   if (!v.valid && staleLaw(v.reason)) {
     // NOT A FINDING. AN ABSTENTION.
     //
@@ -408,7 +409,8 @@ async function main() {
   } else {
     const p = manifest.pin
     const bounded = events.filter(e => e.seq <= p.seq)
-    const { state } = fold(bounded, snapshot ? stateFromJson((await get(base, manifest.genesis!.file)).toString()) : undefined)
+    // Re-derive the pinned state by applying facts; legality was independently proved above.
+    const { state } = foldFacts(bounded, snapshot ? stateFromJson((await get(base, manifest.genesis!.file)).toString()) : undefined)
     failures += await checkAnchor(p, { stateHash: stateHashOf(state), logHash: bounded[bounded.length - 1].hash }, { rpcUrl })
   }
 

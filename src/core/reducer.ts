@@ -900,6 +900,10 @@ function applyAcceptedV1(state: CoreState, e: EventEnvelope, notes: string[]): O
       else ruleProvisionalAct(state, state.acts[tid], ruling as "ACCEPTED" | "REJECTED", "court", e.seq, notes)
       break
     }
+    default:
+      // Factual replay skips admission, never vocabulary support. Silently advancing past a fact
+      // this reducer cannot evolve would produce a plausible but false state.
+      throw new Error(`unknown event kind: ${e.kind}`)
   }
 
   state.seq = e.seq
@@ -1155,7 +1159,11 @@ function sweepNudges(state: CoreState, nowTs: string, notes: string[]) {
 
 // ── fold ────────────────────────────────────────────────────────────────────
 
-export function fold(events: EventEnvelope[], snapshot?: CoreState): { state: CoreState; outcomes: Outcome[] } {
+function foldWith(
+  events: EventEnvelope[],
+  snapshot: CoreState | undefined,
+  apply: (state: CoreState, event: EventEnvelope) => Outcome,
+): { state: CoreState; outcomes: Outcome[] } {
   if (!events.length) throw new Error("empty log")
   const state = initState(events[0], snapshot)
   const outcomes: Outcome[] = []
@@ -1163,7 +1171,17 @@ export function fold(events: EventEnvelope[], snapshot?: CoreState): { state: Co
     const e = events[i]
     if (e.seq !== state.seq + 1) throw new Error(`gap in log: expected seq ${state.seq + 1}, got ${e.seq}`)
     if (Date.parse(e.ts) < Date.parse(state.ts)) throw new Error(`time reversed at seq ${e.seq}`)
-    outcomes.push(applyEvent(state, e))
+    outcomes.push(apply(state, e))
   }
   return { state, outcomes }
+}
+
+/** Ordinary replay: apply the facts the record contains without re-deciding their commands. */
+export function foldFacts(events: EventEnvelope[], snapshot?: CoreState): { state: CoreState; outcomes: Outcome[] } {
+  return foldWith(events, snapshot, evolveV1)
+}
+
+/** Protocol-v1 constitutional replay: re-run historical admission before applying every fact. */
+export function fold(events: EventEnvelope[], snapshot?: CoreState): { state: CoreState; outcomes: Outcome[] } {
+  return foldWith(events, snapshot, applyEvent)
 }
