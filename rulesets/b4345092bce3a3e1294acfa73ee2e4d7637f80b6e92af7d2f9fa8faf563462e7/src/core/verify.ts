@@ -1,13 +1,9 @@
 import { createPublicKey, verify as edVerify } from "crypto"
-import type {
-  AnyEventEnvelope, Candidate, CommandEnvelopeV2, CoreState, EventEnvelope, EventEnvelopeV2,
-} from "./types"
-import { canonical, hashOf, keyFingerprint, ZERO64 } from "./canonical"
+import type { Candidate, CoreState, EventEnvelope } from "./types"
+import { hashOf, keyFingerprint, ZERO64 } from "./canonical"
 import { sigPayload } from "./sequencer"
-import { applyEvent, evolveV1, factualEvent, initState } from "./reducer"
+import { applyEvent, evolveV1, initState } from "./reducer"
 import { dialNum } from "./dials"
-import { commandIdentityV2, commandSignaturePayloadV2, verifyEnvelopeChain } from "./protocol"
-import type { DecisionProofV2 } from "./protocol-v2"
 
 /**
  * The verification layer — the sequencer's door and the stranger's replay (D10).
@@ -50,12 +46,6 @@ export function realVerifier(stateRef: () => CoreState) {
   }
 }
 
-/** Verify a v2 intent under the key roster in force immediately before its decision. */
-export function verifyCommandV2(stateBefore: CoreState, command: CommandEnvelopeV2): boolean {
-  const pub = keyFor(stateBefore, command)
-  return pub !== null && ed25519Verify(pub, commandSignaturePayloadV2(command), command.sig)
-}
-
 export interface LogVerdict {
   valid: boolean
   failedAt?: number
@@ -64,7 +54,7 @@ export interface LogVerdict {
   mode: LogVerificationMode
 }
 
-export type LogVerificationMode = "state-replay" | "constitutional-v1" | "constitutional-mixed"
+export type LogVerificationMode = "state-replay" | "constitutional-v1"
 
 export interface VerifyLogOptions {
   sigs?: boolean
@@ -140,117 +130,6 @@ export function verifyStateReplay(events: EventEnvelope[], opts: VerifyLogOption
 /** Re-run the frozen protocol-v1 admission law as well as the ordinary record proof. */
 export function verifyConstitutionalLog(events: EventEnvelope[], opts: VerifyLogOptions = {}): LogVerdict {
   return verifyInMode(events, opts, "constitutional-v1")
-}
-
-export type DecisionVerifierV2 = (
-  stateBefore: CoreState,
-  events: EventEnvelopeV2[],
-) => DecisionProofV2 | Promise<DecisionProofV2>
-
-export type RulesetResolverV2 = (rulesetHash: string) => DecisionVerifierV2 | null | Promise<DecisionVerifierV2 | null>
-
-export interface VerifyMixedLogOptions extends VerifyLogOptions {
-  resolveRuleset: RulesetResolverV2
-  verifyCommand?: (command: CommandEnvelopeV2, stateBefore: CoreState) => boolean
-}
-
-export interface MixedLogVerdict extends LogVerdict {
-  mode: "constitutional-mixed"
-  rulesets: string[]
-}
-
-const isV2 = (event: AnyEventEnvelope): event is EventEnvelopeV2 =>
-  "protocol" in event && event.protocol === 2
-
-/**
- * Audit one continuous v1→v2 record. V1 admission is re-run through the frozen compatibility
- * path. Each contiguous v2 decision group is checked by the exact retained rulebook named in its
- * cause, then its facts are evolved independently under the current state schema.
- */
-export async function verifyMixedConstitutionalLog(
-  events: AnyEventEnvelope[],
-  opts: VerifyMixedLogOptions,
-): Promise<MixedLogVerdict> {
-  const mode = "constitutional-mixed" as const
-  const rulesets = new Set<string>()
-  const fail = (event: AnyEventEnvelope | undefined, reason: string): MixedLogVerdict => ({
-    valid: false,
-    ...(event ? { failedAt: event.seq } : {}),
-    reason,
-    events: events.length,
-    mode,
-    rulesets: [...rulesets],
-  })
-
-  const wire = verifyEnvelopeChain(events)
-  if (!wire.valid) return {
-    valid: false, failedAt: wire.failedAt, reason: wire.reason, events: events.length, mode, rulesets: [],
-  }
-  if (!events.length || isV2(events[0])) return fail(events[0], "a mixed record needs the frozen v1 genesis")
-
-  let state: CoreState
-  try {
-    state = initState(events[0], opts.snapshot)
-  } catch (err) {
-    return fail(events[0], err instanceof Error ? err.message : String(err))
-  }
-
-  let crossed = false
-  for (let position = 1; position < events.length;) {
-    const event = events[position]
-    if (!isV2(event)) {
-      if (crossed) return fail(event, "protocol v1 event appears after the v2 boundary")
-      const sigsRequiredHere = dialNum(state.dials, "SIGS_FROM_SEQ") > 0
-        && event.seq >= dialNum(state.dials, "SIGS_FROM_SEQ")
-      if (opts.sigs || sigsRequiredHere) {
-        const pub = keyFor(state, event)
-        if (!pub) return fail(event, `no verifiable key for actor ${event.actor}`)
-        if (!ed25519Verify(pub, sigPayload(event), event.sig)) return fail(event, "signature verification failed")
-      }
-      try {
-        applyEvent(state, event)
-      } catch (err) {
-        return fail(event, `reducer refused: ${err instanceof Error ? err.message : String(err)}`)
-      }
-      position++
-      continue
-    }
-
-    crossed = true
-    const identity = commandIdentityV2(event.cause.command)
-    const commandBytes = canonical(event.cause.command)
-    const group: EventEnvelopeV2[] = []
-    while (position < events.length) {
-      const candidate = events[position]
-      if (!isV2(candidate) || commandIdentityV2(candidate.cause.command) !== identity) break
-      if (canonical(candidate.cause.command) !== commandBytes) return fail(candidate, "v2 decision group changes signed command bytes")
-      group.push(candidate)
-      position++
-    }
-
-    const rulesetHash = group[0].cause.rulesetHash
-    if (group.some(fact => fact.cause.rulesetHash !== rulesetHash)) {
-      return fail(group[0], "one v2 decision group names multiple rulesets")
-    }
-    const verifyCommand = opts.verifyCommand ?? ((command, stateBefore) => verifyCommandV2(stateBefore, command))
-    if (!verifyCommand(group[0].cause.command, state)) return fail(group[0], "v2 command signature verification failed")
-
-    const verifier = await opts.resolveRuleset(rulesetHash)
-    if (!verifier) return fail(group[0], `ruleset artifact unavailable: ${rulesetHash}`)
-    rulesets.add(rulesetHash)
-    const proof = await verifier(state, group)
-    if (!proof.valid) return fail(group[0], `ruleset ${rulesetHash} refused its decision proof: ${proof.reason}`)
-
-    for (const fact of group) {
-      try {
-        evolveV1(state, factualEvent(fact))
-      } catch (err) {
-        return fail(fact, `state replay failed: ${err instanceof Error ? err.message : String(err)}`)
-      }
-    }
-  }
-
-  return { valid: true, events: events.length, mode, rulesets: [...rulesets] }
 }
 
 /** @deprecated Compatibility name: historically `verifyLog` meant constitutional v1 replay. */

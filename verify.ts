@@ -1,11 +1,12 @@
 import { readFileSync, existsSync, readdirSync } from "node:fs"
 import { createHash } from "node:crypto"
 import { join } from "node:path"
-import { foldFacts } from "./src/core/reducer"
-import { verifyConstitutionalLog } from "./src/core/verify"
+import { foldMixedFacts } from "./src/core/reducer"
+import { verifyMixedConstitutionalLog } from "./src/core/verify"
 import { CHAIN_TERMINUS_ACT_ID, stateHashOf } from "./src/core/canonical"
 import { stateFromJson } from "./src/codec"
-import type { EventEnvelope } from "./src/core/types"
+import type { AnyEventEnvelope } from "./src/core/types"
+import { createRetainedRulesetResolver } from "./src/verifier/ruleset-resolver"
 
 /**
  * systema-verify — TRUST NOTHING. One command, run by someone who is not the keeper.
@@ -19,8 +20,8 @@ import type { EventEnvelope } from "./src/core/types"
  * WHAT IT PROVES, in order, each step refusing to continue if the one before it failed:
  *   1. BYTES     every artifact matches the sha256 the manifest promised
  *   2. RECORD    the hash chain, the per-actor puddles, and every recomputed envelope hash
- *   3. LAW       every event re-validates under the reducer — a log that folds is a log whose
- *                every act was lawful under the rules in force at its own seq
+ *   3. LAW       v1 admission re-validates under its frozen compatibility rule; every v2
+ *                decision resolves and runs the exact retained rulebook named in its cause
  *   4. SIGNATURES from SIGS_FROM_SEQ onward, enforced whether or not you asked
  *   5. ANCHOR    the folded state hashes to the digest the World Chain contract actually holds.
  *                READ FROM THE CHAIN, not from the publisher's receipt — the receipt is the
@@ -46,7 +47,7 @@ const ok = (s: string) => console.log(`  ✓ ${s}`)
 const bad = (s: string) => console.log(`  ✗ ${s}`)
 const note = (s: string) => console.log(`  · ${s}`)
 
-export function chainTerminusOf(events: EventEnvelope[]): { seq: number; height: number; hash: string; effectiveAt: string } | null {
+export function chainTerminusOf(events: AnyEventEnvelope[]): { seq: number; height: number; hash: string; effectiveAt: string } | null {
   const event = events.find(e => e.kind === "ATTESTATION" && e.payload.actId === CHAIN_TERMINUS_ACT_ID)
   if (!event || typeof event.payload.record !== "string") return null
   const record = JSON.parse(event.payload.record) as { terminus?: { height?: unknown; hash?: unknown; effectiveAt?: unknown } }
@@ -55,7 +56,7 @@ export function chainTerminusOf(events: EventEnvelope[]): { seq: number; height:
   return { seq: event.seq, height: t.height, hash: t.hash, effectiveAt: t.effectiveAt }
 }
 
-function reportChainTerminus(events: EventEnvelope[]): void {
+function reportChainTerminus(events: AnyEventEnvelope[]): void {
   const t = chainTerminusOf(events)
   if (!t) {
     note("the archived systema-chain terminus is not recorded in this prefix")
@@ -135,16 +136,24 @@ function ownCodeHash(): string | null {
 /**
  * Is this failure about the RECORD, or about the tool holding the ruler?
  *
- * Exactly one class of fold failure is unambiguously the tool's: a kind the reducer has never
- * heard of. Every event in a published log was accepted by a sequencer running SOME rulebook, so
- * an unknown kind means this copy predates that rulebook — never that the event is forged. A
- * forger gains nothing by triggering it: the verdict it produces is INCONCLUSIVE, not a pass.
+ * Two classes are unambiguously the tool's: a fact kind its current reducer does not know, or a
+ * v2 decision whose retained rulebook is absent from this verifier package. Either means this
+ * copy lacks the ruler needed to judge the record. A forger gains nothing by triggering it: the
+ * verdict is INCONCLUSIVE, not a pass.
  *
  * Kept deliberately narrow. Widening this to other refusals would start excusing real findings,
  * which is the same mistake pointed the other way — and far worse in a tool whose whole value is
  * being believed when it says no.
  */
-export const staleLaw = (reason?: string): boolean => /unknown event kind/.test(reason ?? "")
+export const staleLaw = (reason?: string): boolean =>
+  /unknown event kind|ruleset artifact unavailable/.test(reason ?? "")
+
+function retainedRulesetRoot(): string {
+  for (const root of [join(__dirname, "rulesets"), join(__dirname, "..", "rulesets")]) {
+    if (existsSync(join(root, "index.json"))) return root
+  }
+  throw new Error("this verifier carries no retained-ruleset registry")
+}
 
 /**
  * Say, in one line, how the law in this copy relates to the law that computed the pin — and read
@@ -256,14 +265,17 @@ async function verifyPlainDir(dir: string, opts: { rpcUrl: string | null }): Pro
   let failures = 0
   console.log("1. bytes\n  – no manifest here (an operator/mirror directory); the record and the anchor carry the proof")
   const events = readFileSync(join(dir, "events.jsonl"), "utf8").split("\n").filter(l => l.trim())
-    .map(l => JSON.parse(l) as EventEnvelope)
+    .map(l => JSON.parse(l) as AnyEventEnvelope)
   const sidecarPath = join(dir, "genesis-state.json")
   const snap = () => existsSync(sidecarPath) ? stateFromJson(readFileSync(sidecarPath, "utf8")) : undefined
   const head = events[events.length - 1]
   ok(`read ${events.length} events, head seq ${head.seq} @ ${head.ts}`)
 
   console.log("\n2. the record, the law, the signatures")
-  const v = verifyConstitutionalLog(events, { snapshot: snap() })
+  const v = await verifyMixedConstitutionalLog(events, {
+    snapshot: snap(),
+    resolveRuleset: createRetainedRulesetResolver(retainedRulesetRoot()),
+  })
   let inconclusive: string | null = null
   if (!v.valid && staleLaw(v.reason)) {
     // Same abstention as the published path — an operator checking their own mirror deserves the
@@ -289,7 +301,7 @@ async function verifyPlainDir(dir: string, opts: { rpcUrl: string | null }): Pro
     }
     const bounded = events.filter(e => e.seq <= p.seq)
     // The admission proof above and factual state replay are deliberately different claims.
-    const { state } = foldFacts(bounded, snap())
+    const { state } = foldMixedFacts(bounded, snap())
     failures += await checkAnchor(p, { stateHash: stateHashOf(state), logHash: bounded[bounded.length - 1].hash }, opts)
   }
 
@@ -355,7 +367,7 @@ async function main() {
   if (failures) { console.log("\nREFUSING to continue: the bytes are not what was promised."); process.exit(1) }
 
   const events = pieces.map(b => b.toString()).join("").split("\n").filter(l => l.trim())
-    .map(l => JSON.parse(l) as EventEnvelope)
+    .map(l => JSON.parse(l) as AnyEventEnvelope)
   if (events.length !== manifest.totalEvents) {
     bad(`assembled ${events.length} events, manifest promised ${manifest.totalEvents}`); failures++
   }
@@ -367,7 +379,10 @@ async function main() {
   // ── 2-4. RECORD, LAW, SIGNATURES ──────────────────────────────────────────
   console.log("\n2. the record, the law, the signatures")
   // initState MUTATES its snapshot, so the fold below gets its own parse.
-  const v = verifyConstitutionalLog(events, { snapshot: manifest.genesis ? stateFromJson((await get(base, manifest.genesis.file)).toString()) : undefined })
+  const v = await verifyMixedConstitutionalLog(events, {
+    snapshot: manifest.genesis ? stateFromJson((await get(base, manifest.genesis.file)).toString()) : undefined,
+    resolveRuleset: createRetainedRulesetResolver(retainedRulesetRoot()),
+  })
   if (!v.valid && staleLaw(v.reason)) {
     // NOT A FINDING. AN ABSTENTION.
     //
@@ -410,7 +425,7 @@ async function main() {
     const p = manifest.pin
     const bounded = events.filter(e => e.seq <= p.seq)
     // Re-derive the pinned state by applying facts; legality was independently proved above.
-    const { state } = foldFacts(bounded, snapshot ? stateFromJson((await get(base, manifest.genesis!.file)).toString()) : undefined)
+    const { state } = foldMixedFacts(bounded, snapshot ? stateFromJson((await get(base, manifest.genesis!.file)).toString()) : undefined)
     failures += await checkAnchor(p, { stateHash: stateHashOf(state), logHash: bounded[bounded.length - 1].hash }, { rpcUrl })
   }
 

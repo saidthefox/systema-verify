@@ -22,8 +22,8 @@ Each step refuses to continue if the one before it failed.
 
 1. **bytes** — every artifact matches the sha256 the manifest promised
 2. **record** — the hash chain, the per-actor puddles, every recomputed envelope hash
-3. **law** — every event re-validates under the reducer. A log that folds is a log whose every act
-   was lawful *under the rules in force at its own sequence number*
+3. **law** — v1 events re-validate under the frozen compatibility reducer; each v2 command/fact
+   group is proved by the exact retained rulebook hash recorded in its cause
 4. **signatures** — from `SIGS_FROM_SEQ` onward, enforced whether or not you asked for it
 5. **anchor** — the folded state's digest is read back **off World Chain** and compared
 
@@ -68,12 +68,17 @@ exact person who came to check whether it was.
 
 The law in this package hashes to:
 
-    ee7e5c4efce9f9fa4e70ac5bba5e6ecda9e26a75b5d8a71598b42bd985b861cb
+    a1fc681ab0ec4f5caf2a5884ffffc8d63df3ba4ce8e5fdb0007a1bdb3bbba0ca
 
 Compare that against `pin.codeHash` in any published `manifest.json`. Equal means you hold the
 rulebook that computed that pin. **Different is not automatically wrong** — the kingdom's law moves
 between pins, and re-deriving the same digest under a different rulebook is a stronger result than
 agreement, which the tool will say when it happens.
+
+The package also carries the append-only `rulesets/` registry and source bundles needed to judge
+historical v2 decisions. Each bundle's manifest, file roster, file hashes and aggregate content
+address are checked before its decision proof is imported. If a record names a newer bundle this
+copy does not carry, the verdict is `INCONCLUSIVE`, never `VERIFIED`.
 
 ## This directory is generated
 

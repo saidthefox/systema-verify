@@ -1,4 +1,4 @@
-import type { ActKind, ActState, AnyEventEnvelope, CoreState, EventEnvelope, EventEnvelopeV2, Outcome } from "./types"
+import type { ActKind, ActState, CoreState, EventEnvelope, Outcome } from "./types"
 import { EDGE_TYPES, RAID_LIVE, claimName, isDead, nameHolders, releaseName, targetKey } from "./types"
 import { CHAIN_TERMINUS_ACT_HASH, CHAIN_TERMINUS_ACT_ID, hashOf, keyFingerprint, norm, nameShapeError, sha256 } from "./canonical"
 import { LIMITS, firstTooLong } from "./limits"
@@ -1179,31 +1179,6 @@ function foldWith(
 /** Ordinary replay: apply the facts the record contains without re-deciding their commands. */
 export function foldFacts(events: EventEnvelope[], snapshot?: CoreState): { state: CoreState; outcomes: Outcome[] } {
   return foldWith(events, snapshot, evolveV1)
-}
-
-const isV2Fact = (event: AnyEventEnvelope): event is EventEnvelopeV2 =>
-  "protocol" in event && event.protocol === 2
-
-/** Apply the factual content of either envelope protocol under the current state schema. */
-export function factualEvent(event: AnyEventEnvelope): EventEnvelope {
-  if (!isV2Fact(event)) return event
-  // evolveV1 consumes only fact fields. The command signature is supplied as an adapter value;
-  // it is not constitutional evidence for the fact and is never included in its v2 hash.
-  return { ...event, sig: event.cause.command.sig }
-}
-
-/** Ordinary mixed replay: apply recorded facts without re-deciding their causing commands. */
-export function foldMixedFacts(events: AnyEventEnvelope[], snapshot?: CoreState): { state: CoreState; outcomes: Outcome[] } {
-  if (!events.length || isV2Fact(events[0])) throw new Error("a mixed record needs the frozen v1 genesis")
-  const state = initState(events[0], snapshot)
-  const outcomes: Outcome[] = []
-  for (let i = 1; i < events.length; i++) {
-    const event = events[i]
-    if (event.seq !== state.seq + 1) throw new Error(`gap in log: expected seq ${state.seq + 1}, got ${event.seq}`)
-    if (Date.parse(event.ts) < Date.parse(state.ts)) throw new Error(`time reversed at seq ${event.seq}`)
-    outcomes.push(evolveV1(state, factualEvent(event)))
-  }
-  return { state, outcomes }
 }
 
 /** Protocol-v1 constitutional replay: re-run historical admission before applying every fact. */

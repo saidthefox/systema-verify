@@ -1,0 +1,39 @@
+{
+  "format": 1,
+  "artifacts": [
+    {
+      "rulesetHash": "3264becad3ccd1920178fb46b1333b6684c86e5c55ff6790bcde7b44660d0902",
+      "path": "rulesets/3264becad3ccd1920178fb46b1333b6684c86e5c55ff6790bcde7b44660d0902",
+      "status": "compatibility-baseline",
+      "protocols": [
+        1
+      ]
+    },
+    {
+      "rulesetHash": "a1fc681ab0ec4f5caf2a5884ffffc8d63df3ba4ce8e5fdb0007a1bdb3bbba0ca",
+      "path": "rulesets/a1fc681ab0ec4f5caf2a5884ffffc8d63df3ba4ce8e5fdb0007a1bdb3bbba0ca",
+      "status": "candidate",
+      "protocols": [
+        1,
+        2
+      ]
+    },
+    {
+      "rulesetHash": "b4345092bce3a3e1294acfa73ee2e4d7637f80b6e92af7d2f9fa8faf563462e7",
+      "path": "rulesets/b4345092bce3a3e1294acfa73ee2e4d7637f80b6e92af7d2f9fa8faf563462e7",
+      "status": "compatibility-baseline",
+      "protocols": [
+        1
+      ]
+    },
+    {
+      "rulesetHash": "ee7e5c4efce9f9fa4e70ac5bba5e6ecda9e26a75b5d8a71598b42bd985b861cb",
+      "path": "rulesets/ee7e5c4efce9f9fa4e70ac5bba5e6ecda9e26a75b5d8a71598b42bd985b861cb",
+      "status": "candidate",
+      "protocols": [
+        1,
+        2
+      ]
+    }
+  ]
+}
