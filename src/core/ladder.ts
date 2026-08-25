@@ -4,6 +4,7 @@ import { sha256 } from "./canonical"
 import { LIMITS, firstTooLong } from "./limits"
 import { dialBig, dialBool, dialNum } from "./dials"
 import { activeJudges, quorumCrossing, quorumMinJudges } from "./math"
+import { nextDefinitionVersion } from "./definitions"
 import { drawJury, drawSeed, eligibleJurors, jurySize, nextSeed } from "./sortition"
 import {
   freeName, fxActSync, fxRep, fxStatus, refundMarketVotes, refundOpenStakes, ruleProvisionalAct, settleMarketVotes,
@@ -392,12 +393,16 @@ function seatSuccessor(state: CoreState, c: Challenge, rule: string, atSeq: numb
     const n = norm(spec.canonicalName as string)
     seat({ id: entryId, kind: "ENTRY", authorFp: c.authorFp, status: "PROVISIONAL", filedSeq: atSeq, contentHash: `replace:${c.id}`, nameNorm: n })
     claimName(state.names, n, entryId) // claim ALONGSIDE (plural, A+A) — the relic's hold outlives it, as live's labelHolders always did
-    seat({ id: `succdef:${c.id}`, kind: "DEFINITION", authorFp: c.authorFp, status: "PROVISIONAL", filedSeq: atSeq, contentHash: `replacedef:${c.id}`, entryId })
+    seat({ id: `succdef:${c.id}`, kind: "DEFINITION", authorFp: c.authorFp, status: "PROVISIONAL", filedSeq: atSeq, contentHash: `replacedef:${c.id}`, entryId, version: 1 })
     return entryId
   }
   if (c.targetType === "DEFINITION") {
     const old = state.acts[c.targetId]
-    return seat({ id: `succ:${c.id}`, kind: "DEFINITION", authorFp: c.authorFp, status: "PROVISIONAL", filedSeq: atSeq, contentHash: `replace:${c.id}`, entryId: old.entryId })
+    return seat({
+      id: `succ:${c.id}`, kind: "DEFINITION", authorFp: c.authorFp, status: "PROVISIONAL",
+      filedSeq: atSeq, contentHash: `replace:${c.id}`, entryId: old.entryId,
+      version: nextDefinitionVersion(state, old.entryId!),
+    })
   }
   return seat({
     id: `succ:${c.id}`, kind: "EDGE", authorFp: c.authorFp, status: "PROVISIONAL", filedSeq: atSeq, contentHash: `replace:${c.id}`,

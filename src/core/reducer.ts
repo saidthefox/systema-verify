@@ -4,6 +4,7 @@ import { CHAIN_TERMINUS_ACT_HASH, CHAIN_TERMINUS_ACT_ID, hashOf, keyFingerprint,
 import { LIMITS, firstTooLong } from "./limits"
 import { GENESIS_DIALS, dialBig, dialBool, dialNum } from "./dials"
 import { activeJudges, medianActiveRepMilli, quorumCrossing } from "./math"
+import { nextDefinitionVersion } from "./definitions"
 import { beginFx, cascadeEntry, fxStatus, refundMarketVotes, refundOpenStakes, ruleProvisionalAct, takeFx } from "./effects"
 import { instanceAdjacency, ladderVia } from "./graph"
 import {
@@ -72,6 +73,8 @@ export function initState(genesis: EventEnvelope, snapshot?: CoreState): CoreSta
     snapshot.dials = { ...GENESIS_DIALS, ...snapshot.dials }
     snapshot.attestations ??= {} // a sidecar cut before Amendment 1 was amended carries none
     snapshot.revokedCredentials ??= {} // …and one cut before ALIAS_REVOKED (2026-08-19) carries none
+    // Empty for every pre-pilot kingdom, so stateHashOf drops it and no historical receipt moves.
+    snapshot.lineages ??= {}
     return snapshot
   }
 
@@ -88,6 +91,7 @@ export function initState(genesis: EventEnvelope, snapshot?: CoreState): CoreSta
     actors: {},
     attestations: {},
     houses: {},
+    lineages: {},
     credentialToHouse: {},
     revokedCredentials: {},
     acts: {},
@@ -291,6 +295,66 @@ export function validate(state: CoreState, e: Pick<EventEnvelope, "kind" | "v" |
       const house = state.houses[houseId]
       if (!house) return "no such house"
       if (house.agentFps.length >= dialNum(state.dials, "HOUSE_AGENT_SLOTS")) return "the hand is full — one agent per house (Law 38)"
+      return null
+    }
+    case "LINEAGE_CHARTERED": {
+      if (!dialBool(state.dials, "LINEAGES_OPEN")) return "lineage chartering is not open (staging dial)"
+      if (e.actor !== state.keys.court) return "a lineage is chartered by the court"
+      const lineageId = str(p, "lineageId")
+      const slug = str(p, "slug")
+      const lineageFp = str(p, "lineageFp")
+      const publicKey = str(p, "publicKey")
+      const assurance = str(p, "assurance")
+      if (!lineageId || !slug || !lineageFp || !str(p, "label") || !str(p, "providerClaim") || !publicKey) {
+        return "lineageId, slug, lineageFp, label, providerClaim, and publicKey required"
+      }
+      if (assurance !== "KEEPER_CHARTERED") return "the staging charter assurance is KEEPER_CHARTERED"
+      if (state.lineages[lineageId]) return "lineage already chartered"
+      if (Object.values(state.lineages).some(l => l.slug === slug)) return "lineage slug already chartered"
+      if (state.actors[lineageFp]) return "lineage key already registered"
+      if (keyFingerprint(publicKey) !== lineageFp) return "lineage fingerprint does not match its public key"
+      return null
+    }
+    case "LINEAGE_AGENT_CHARTERED": {
+      if (!dialBool(state.dials, "LINEAGES_OPEN")) return "lineage chartering is not open (staging dial)"
+      if (e.actor !== state.keys.court) return "a lineage agent is chartered by the court"
+      const lineageId = str(p, "lineageId")
+      const agentId = str(p, "agentId")
+      const agentFp = str(p, "agentFp")
+      const publicKey = str(p, "publicKey")
+      if (!lineageId || !agentId || !agentFp || !str(p, "label") || !str(p, "modelFamily") || !publicKey) {
+        return "lineageId, agentId, agentFp, label, modelFamily, and publicKey required"
+      }
+      const lineage = state.lineages[lineageId]
+      if (!lineage) return "no such lineage"
+      if (str(p, "providerClaim") !== lineage.providerClaim) return "agent provider claim does not match its lineage"
+      if (str(p, "admissionBasis") !== "LINEAGE_AGENT") return "lineage admission basis must be LINEAGE_AGENT"
+      if (state.actors[agentFp]) return "agent key already registered"
+      if (Object.values(state.actors).some(a => a.entityType === "agent" && a.entityId === agentId)) return "agent id already registered"
+      if (keyFingerprint(publicKey) !== agentFp) return "agent fingerprint does not match its public key"
+      return null
+    }
+    case "LINEAGE_AGENT_ADMITTED": {
+      if (!dialBool(state.dials, "LINEAGES_OPEN")) return "lineage admission is not open (staging dial)"
+      if (e.actor !== state.keys.court) return "an existing agent is admitted to a lineage by the court"
+      const lineageId = str(p, "lineageId")
+      const agentId = str(p, "agentId")
+      const agentFp = str(p, "agentFp")
+      const houseId = str(p, "houseId")
+      const publicKey = str(p, "publicKey")
+      if (!lineageId || !agentId || !agentFp || !houseId || !str(p, "label") || !str(p, "modelFamily") || !publicKey) {
+        return "lineageId, agentId, agentFp, houseId, label, modelFamily, and publicKey required"
+      }
+      const lineage = state.lineages[lineageId]
+      if (!lineage) return "no such lineage"
+      if (str(p, "providerClaim") !== lineage.providerClaim) return "agent provider claim does not match its lineage"
+      if (str(p, "admissionBasis") !== "HOUSE_HAND") return "an affiliated agent keeps its HOUSE_HAND admission basis"
+      const agent = state.actors[agentFp]
+      if (!agent || agent.entityType !== "agent" || agent.entityId !== agentId) return "no such existing agent identity"
+      if (agent.publicKey !== publicKey || keyFingerprint(publicKey) !== agentFp) return "agent fingerprint does not match its registered public key"
+      const house = state.houses[houseId]
+      if (!house?.agentFps.includes(agentFp)) return "the existing agent is not a hand of that house"
+      if (Object.values(state.lineages).some(l => l.agentFps.includes(agentFp))) return "agent already belongs to a lineage"
       return null
     }
     case "ACT_FILED":
@@ -722,6 +786,37 @@ export function applyEvent(state: CoreState, e: EventEnvelope): Outcome {
       house.agentFps.push(e.actor)
       break
     }
+    case "LINEAGE_CHARTERED": {
+      const lineageId = str(p, "lineageId")!
+      const lineageFp = str(p, "lineageFp")!
+      addActor(state, lineageFp, "lineage", lineageId, str(p, "label")!, str(p, "publicKey")!, e.ts)
+      state.lineages[lineageId] = {
+        id: lineageId,
+        slug: str(p, "slug")!,
+        label: str(p, "label")!,
+        providerClaim: str(p, "providerClaim")!,
+        assurance: "KEEPER_CHARTERED",
+        keyFp: lineageFp,
+        agentFps: [],
+      }
+      notes.push(`lineage ${lineageId} chartered by the court — no human standing conferred`)
+      break
+    }
+    case "LINEAGE_AGENT_CHARTERED": {
+      const lineage = state.lineages[str(p, "lineageId")!]
+      const agentFp = str(p, "agentFp")!
+      addActor(state, agentFp, "agent", str(p, "agentId")!, str(p, "label")!, str(p, "publicKey")!, e.ts)
+      lineage.agentFps.push(agentFp)
+      notes.push(`agent ${str(p, "agentId")} admitted through lineage ${lineage.id} — agent powers only`)
+      break
+    }
+    case "LINEAGE_AGENT_ADMITTED": {
+      const lineage = state.lineages[str(p, "lineageId")!]
+      const agentFp = str(p, "agentFp")!
+      lineage.agentFps.push(agentFp)
+      notes.push(`existing house hand ${str(p, "agentId")} affiliated with lineage ${lineage.id} — house membership and identity preserved`)
+      break
+    }
     case "ACT_FILED":
       applyFiling(state, e, notes)
       break
@@ -795,7 +890,7 @@ export function applyEvent(state: CoreState, e: EventEnvelope): Outcome {
   return { accepted: true, notes, fx: takeFx() }
 }
 
-function addActor(state: CoreState, fp: string, entityType: "house" | "agent" | "user" | "system", entityId: string, label: string, publicKey: string, ts: string) {
+function addActor(state: CoreState, fp: string, entityType: "house" | "lineage" | "agent" | "user" | "system", entityId: string, label: string, publicKey: string, ts: string) {
   state.actors[fp] = {
     fp, entityType, entityId, label, publicKey,
     repMilli: 0n, balanceBase: 0n, openStakeMilli: 0n, lastVoteTs: null,
@@ -830,28 +925,6 @@ function consumeFilingSlot(state: CoreState, authorFp: string, ts: string) {
 function applyFilingRefused(state: CoreState, e: EventEnvelope, notes: string[]) {
   consumeFilingSlot(state, e.actor, e.ts)
   notes.push(`filing refused, slot charged (Law 28): ${str(e.payload, "reason")}`)
-}
-
-/**
- * A definition's version, derived from the fold (Law: an act's hash commits to the act).
- *
- * The door must hash `{entryId, version, body}` BEFORE the event exists, so it asks this same
- * function of the writer's state and sends the answer along; `validateFiling` refuses any
- * answer it does not itself derive, so a filing that raced another definition on the same
- * entry is refused and retried rather than recorded under a hash that describes nothing.
- * (Before 2026-08-17 the door hashed `version: 0` while the row stored 1 — every definition
- * filed through the flip carried a hash its own contents could never reproduce.)
- *
- * Counts, rather than maxes, because the snapshot's definitions are contiguous per entry —
- * verified on both kingdoms at the cut: zero entries where max(version) != count(*).
- */
-export function nextDefinitionVersion(state: CoreState, entryId: string): number {
-  let n = 0
-  for (const id of Object.keys(state.acts)) {
-    const a = state.acts[id]
-    if (a.kind === "DEFINITION" && a.entryId === entryId) n++
-  }
-  return n + 1
 }
 
 function applyFiling(state: CoreState, e: EventEnvelope, notes: string[]) {

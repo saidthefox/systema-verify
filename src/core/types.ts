@@ -117,7 +117,7 @@ export interface Stake {
 
 export interface Actor {
   fp: string
-  entityType: "house" | "agent" | "user" | "system"
+  entityType: "house" | "lineage" | "agent" | "user" | "system"
   entityId: string
   label: string
   publicKey: string
@@ -144,6 +144,18 @@ export interface House {
   keyFp: string
   agentFps: string[]
   credentialHashes: string[]
+}
+
+/** A cognitive-provenance anchor chartered by the court. It deliberately carries no
+ * credential hashes or human seat: those are House/personhood properties. */
+export interface Lineage {
+  id: string
+  slug: string
+  label: string
+  providerClaim: string
+  assurance: "KEEPER_CHARTERED"
+  keyFp: string
+  agentFps: string[]
 }
 
 // ── the contest ladder (Laws 14/24/30/31, Amendment 5E) ─────────────────────
@@ -208,6 +220,7 @@ export interface CoreState {
    *  anchoring idempotent, exactly as the chain's one-block-per-act rule did. */
   attestations: Record<string, Attestation>
   houses: Record<string, House>
+  lineages: Record<string, Lineage>
   /** EVERY credential that has ever claimed a house — Law 38's sybil binding. Append-only on
    *  purpose: if a claim could be forgotten, the same human could unlink and found a second
    *  house, and one-human-one-house would stop meaning anything. */

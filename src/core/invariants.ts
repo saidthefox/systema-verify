@@ -111,6 +111,23 @@ const sybilRules: Check = s => {
   return null
 }
 
+const lineageMembership: Check = s => {
+  const held = new Set<string>()
+  for (const lineageId of Object.keys(s.lineages)) {
+    const lineage = s.lineages[lineageId]
+    const anchor = s.actors[lineage.keyFp]
+    if (!anchor || anchor.entityType !== "lineage" || anchor.entityId !== lineageId) {
+      return `lineage ${lineageId} has no matching lineage actor`
+    }
+    for (const fp of lineage.agentFps) {
+      if (held.has(fp)) return `agent ${fp} belongs to more than one lineage`
+      held.add(fp)
+      if (s.actors[fp]?.entityType !== "agent") return `lineage ${lineageId} holds non-agent ${fp}`
+    }
+  }
+  return null
+}
+
 const rulingsCarryProvenance: Check = s => {
   for (const id of Object.keys(s.acts)) {
     const a = s.acts[id]
@@ -141,6 +158,7 @@ export const INVARIANTS: Record<string, Check> = {
   noOpenMarketOnRuledActs,
   committedRepMatchesOpenVotes,
   sybilRules,
+  lineageMembership,
   rulingsCarryProvenance,
   contestLifecycle,
   nudgeHand,
