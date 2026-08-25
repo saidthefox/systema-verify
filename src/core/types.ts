@@ -27,6 +27,9 @@ export interface EventEnvelope {
   hash: string
 }
 
+/** Explicit name for the historical envelope; `EventEnvelope` remains the compatibility name. */
+export type EventEnvelopeV1 = EventEnvelope
+
 /**
  * The protocol-v1 command accepted by the current sequencer.
  *
@@ -57,6 +60,29 @@ export interface CommandEnvelopeV2 {
 
 export type CommandEnvelope = LegacyCommandEnvelope | CommandEnvelopeV2
 
+/** A v2 fact has no actor signature: the independently signed intent is retained in `cause`. */
+export interface EventCauseV2 {
+  command: CommandEnvelopeV2
+  eventIndex: number
+  rulesetHash: string
+}
+
+export interface EventEnvelopeV2 {
+  protocol: 2
+  seq: number
+  ts: string
+  kind: string
+  v: number // schema version for this fact kind
+  actor: string // author/subject of the fact; the causal caller is cause.command.actor
+  payload: Record<string, unknown>
+  cause: EventCauseV2
+  prev: string
+  entityPrev: string | null
+  hash: string
+}
+
+export type AnyEventEnvelope = EventEnvelopeV1 | EventEnvelopeV2
+
 /** The fact-shaped material a decision returns before the sequencer orders and seals it. */
 export interface EventDraft {
   kind: string
@@ -71,6 +97,20 @@ export interface Decision {
   accepted: boolean
   reason?: string
   events: EventDraft[]
+  charged?: boolean
+}
+
+export interface FactDraftV2 {
+  kind: string
+  v: number
+  actor: string
+  payload: Record<string, unknown>
+}
+
+export interface DecisionV2 {
+  accepted: boolean
+  reason?: string
+  facts: FactDraftV2[]
   charged?: boolean
 }
 

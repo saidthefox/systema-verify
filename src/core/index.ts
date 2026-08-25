@@ -12,4 +12,8 @@ export { initState, validate, applyEvent, evolveV1, fold, foldFacts, activatePen
 export { LogSim, sigPayload } from "./sequencer"
 export { INVARIANTS, checkInvariants } from "./invariants"
 export { fingerprintOf, ed25519Verify, realVerifier, verifyLog, verifyStateReplay, verifyConstitutionalLog } from "./verify"
-export { LEGACY_PROTOCOL_VERSION, NEXT_PROTOCOL_VERSION, protocolVersionOf, legacyEventDraft, decideV1 } from "./protocol"
+export {
+  LEGACY_PROTOCOL_VERSION, NEXT_PROTOCOL_VERSION, protocolVersionOf, legacyEventDraft, decideV1,
+  commandSignaturePayloadV2, commandIdentityV2, commandEnvelopeV2Error, eventEnvelopeV2Error,
+  sealEventV2, eventHashOf, verifyEnvelopeChain,
+} from "./protocol"
