@@ -12,3 +12,4 @@ export { initState, validate, applyEvent, fold, activatePending } from "./reduce
 export { LogSim, sigPayload } from "./sequencer"
 export { INVARIANTS, checkInvariants } from "./invariants"
 export { fingerprintOf, ed25519Verify, realVerifier, verifyLog } from "./verify"
+export { LEGACY_PROTOCOL_VERSION, NEXT_PROTOCOL_VERSION, protocolVersionOf, legacyEventDraft } from "./protocol"

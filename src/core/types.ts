@@ -27,13 +27,51 @@ export interface EventEnvelope {
   hash: string
 }
 
-/** A command before the sequencer accepts it: everything the author controls. */
-export interface Candidate {
+/**
+ * The protocol-v1 command accepted by the current sequencer.
+ *
+ * V1 deliberately used the same kind/payload/signature as the event it became. Keep this
+ * shape forever: every existing record depends on the absence of a protocol discriminator.
+ */
+export interface LegacyCommandEnvelope {
   kind: string
   v: number
   actor: string
   payload: Record<string, unknown>
   sig: string
+}
+
+/** @deprecated Protocol-v1 name retained for existing callers and historical replay. */
+export type Candidate = LegacyCommandEnvelope
+
+/** Signed intent. A v2 event carries this whole value as its independently verifiable cause. */
+export interface CommandEnvelopeV2 {
+  protocol: 2
+  id: string // client-generated idempotency key
+  command: string
+  v: number // schema version for this command kind
+  actor: string
+  payload: Record<string, unknown>
+  sig: string
+}
+
+export type CommandEnvelope = LegacyCommandEnvelope | CommandEnvelopeV2
+
+/** The fact-shaped material a decision returns before the sequencer orders and seals it. */
+export interface EventDraft {
+  kind: string
+  v: number
+  actor: string
+  payload: Record<string, unknown>
+  sig: string
+}
+
+/** Pure admission result. Rejections have no event unless `events` explicitly contains one. */
+export interface Decision {
+  accepted: boolean
+  reason?: string
+  events: EventDraft[]
+  charged?: boolean
 }
 
 // ── state ───────────────────────────────────────────────────────────────────
