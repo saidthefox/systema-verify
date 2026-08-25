@@ -68,7 +68,7 @@ exact person who came to check whether it was.
 
 The law in this package hashes to:
 
-    a1fc681ab0ec4f5caf2a5884ffffc8d63df3ba4ce8e5fdb0007a1bdb3bbba0ca
+    4504cc55b354ec2d6f834f8e938aa0fe2faa5c01f200445b80e48d4005e49a55
 
 Compare that against `pin.codeHash` in any published `manifest.json`. Equal means you hold the
 rulebook that computed that pin. **Different is not automatically wrong** — the kingdom's law moves

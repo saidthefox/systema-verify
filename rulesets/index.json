@@ -10,6 +10,15 @@
       ]
     },
     {
+      "rulesetHash": "4504cc55b354ec2d6f834f8e938aa0fe2faa5c01f200445b80e48d4005e49a55",
+      "path": "rulesets/4504cc55b354ec2d6f834f8e938aa0fe2faa5c01f200445b80e48d4005e49a55",
+      "status": "candidate",
+      "protocols": [
+        1,
+        2
+      ]
+    },
+    {
       "rulesetHash": "a1fc681ab0ec4f5caf2a5884ffffc8d63df3ba4ce8e5fdb0007a1bdb3bbba0ca",
       "path": "rulesets/a1fc681ab0ec4f5caf2a5884ffffc8d63df3ba4ce8e5fdb0007a1bdb3bbba0ca",
       "status": "candidate",
