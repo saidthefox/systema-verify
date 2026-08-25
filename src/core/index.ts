@@ -17,3 +17,5 @@ export {
   commandSignaturePayloadV2, commandIdentityV2, commandEnvelopeV2Error, eventEnvelopeV2Error,
   sealEventV2, eventHashOf, verifyEnvelopeChain,
 } from "./protocol"
+export { decideV2, ClosedV2Harness, verifyDecisionV2 } from "./protocol-v2"
+export type { CommandKindV2, V2SubmitResult, DecisionProofV2 } from "./protocol-v2"
