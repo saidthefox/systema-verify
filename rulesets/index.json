@@ -19,6 +19,15 @@
       ]
     },
     {
+      "rulesetHash": "507cad2ef7c810411d7efdf6282c1bf69fe8e724f16af52f6492cd52ffb6db1a",
+      "path": "rulesets/507cad2ef7c810411d7efdf6282c1bf69fe8e724f16af52f6492cd52ffb6db1a",
+      "status": "candidate",
+      "protocols": [
+        1,
+        2
+      ]
+    },
+    {
       "rulesetHash": "955f3108ad5aafd013405e122196ed8daa50249d6b963793bec4cfcc817ed5ff",
       "path": "rulesets/955f3108ad5aafd013405e122196ed8daa50249d6b963793bec4cfcc817ed5ff",
       "status": "candidate",

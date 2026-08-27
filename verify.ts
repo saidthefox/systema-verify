@@ -7,6 +7,7 @@ import { CHAIN_TERMINUS_ACT_ID, stateHashOf } from "./src/core/canonical"
 import { stateFromJson } from "./src/codec"
 import type { AnyEventEnvelope } from "./src/core/types"
 import { createRetainedRulesetResolver } from "./src/verifier/ruleset-resolver"
+import { BEDROCK_ATTESTATION_ID, BEDROCK_SCHEMA, sumBedrockLots, type BedrockManifest } from "./src/core/coin-lots"
 
 /**
  * systema-verify — TRUST NOTHING. One command, run by someone who is not the keeper.
@@ -197,6 +198,7 @@ interface Manifest {
   head: { seq: number; hash: string; ts: string }
   totalEvents: number
   genesis: { file: string; sha256: string } | null
+  bedrock?: { file: string; schema: string; sha256: string; archiveThroughBlock: number; eventGenesisHash: string } | null
   segments: { file: string; fromSeq: number; toSeq: number; sha256: string }[]
   tail: { file: string; sha256: string }
   pin: {
@@ -208,6 +210,51 @@ interface Manifest {
      *  mismatch is a refusal, because it is the shape a redirected verification would take. */
     anchor?: { chainId?: number; contract?: string }
   } | null
+}
+
+function checkBedrock(
+  bedrock: BedrockManifest,
+  bedrockHash: string,
+  events: AnyEventEnvelope[],
+  snapshotJson: string,
+): number {
+  let failures = 0
+  if (bedrock.schema !== BEDROCK_SCHEMA || bedrock.reconciliation.deltaBase !== "0") {
+    bad("bedrock manifest is not the exact reconciled v1 schema"); return 1
+  }
+  if (bedrock.source.eventGenesis.hash !== events[0].hash) { bad("bedrock manifest names a different event genesis"); failures++ }
+  if (bedrock.seam.archiveThrough.block !== 24409) { bad(`bedrock seam is block ${bedrock.seam.archiveThrough.block}, expected the proven cut at 24409`); failures++ }
+  const snapshot = stateFromJson(snapshotJson)
+  const lotIds = new Set<string>()
+  let total = 0n
+  for (const entity of bedrock.entities) {
+    const actor = snapshot.actors[entity.fingerprint]
+    const sum = sumBedrockLots(entity.lots)
+    if (!actor || actor.balanceBase !== sum || BigInt(entity.importedGenesisBalanceBase) !== sum) {
+      bad(`bedrock lots do not equal genesis balance for ${entity.fingerprint}`); failures++
+    }
+    for (const lot of entity.lots) {
+      if (lot.block > bedrock.seam.archiveThrough.block || lotIds.has(lot.id)) {
+        bad(`invalid or duplicate bedrock lot ${lot.id}`); failures++
+      }
+      lotIds.add(lot.id)
+    }
+    total += sum
+  }
+  if (total.toString() !== bedrock.reconciliation.archiveLotsBalanceBase ||
+      total.toString() !== bedrock.reconciliation.importedGenesisBalanceBase) {
+    bad("bedrock global lot total does not equal the imported genesis total"); failures++
+  }
+  const attestation = events.find(event =>
+    event.kind === "ATTESTATION" && event.payload.actId === BEDROCK_ATTESTATION_ID && event.payload.actHash === bedrockHash)
+  if (!attestation) { bad("event log does not contain the bedrock manifest commitment"); failures++ }
+  else {
+    const prior = events.filter(event => event.seq < attestation.seq)
+    const governance = foldMixedFacts(prior, stateFromJson(snapshotJson)).state.keys.governance
+    if (attestation.actor !== governance) { bad("bedrock manifest commitment was not made by the governance key"); failures++ }
+  }
+  if (!failures) ok(`${bedrock.reconciliation.lotCount} bedrock lots exactly reconcile ${total} base units at archive block 24409; governance committed ${bedrockHash.slice(0, 16)}…`)
+  return failures
 }
 
 /** Step 3, shared by both directory shapes: re-derive the pin, then ask the chain. */
@@ -358,11 +405,22 @@ async function main() {
   ok(`${manifest.segments.length} sealed segment(s) + tail match their published hashes`)
 
   let snapshot
+  let snapshotJson: string | null = null
   if (manifest.genesis) {
     const g = await get(base, manifest.genesis.file)
     if (sha256(g) !== manifest.genesis.sha256) { bad("genesis-state.json does not match its manifest hash"); failures++ }
     else ok(`genesis sidecar matches (${(g.length / 1e6).toFixed(1)} MB)`)
-    snapshot = stateFromJson(g.toString())
+    snapshotJson = g.toString()
+    snapshot = stateFromJson(snapshotJson)
+  }
+  let bedrock: BedrockManifest | null = null
+  let bedrockHash: string | null = null
+  if (manifest.bedrock) {
+    const b = await get(base, manifest.bedrock.file)
+    bedrockHash = sha256(b)
+    if (bedrockHash !== manifest.bedrock.sha256) { bad("bedrock provenance does not match its manifest hash"); failures++ }
+    else ok(`bedrock provenance matches (${(b.length / 1e6).toFixed(1)} MB)`)
+    bedrock = JSON.parse(b.toString()) as BedrockManifest
   }
   if (failures) { console.log("\nREFUSING to continue: the bytes are not what was promised."); process.exit(1) }
 
@@ -411,6 +469,7 @@ async function main() {
   } else {
     ok(`hash chain, puddles, envelope hashes, reducer validity and signatures: ${v.events} events`)
     reportChainTerminus(events)
+    if (bedrock && bedrockHash && snapshotJson) failures += checkBedrock(bedrock, bedrockHash, events, snapshotJson)
   }
 
   // ── 5. ANCHOR ─────────────────────────────────────────────────────────────
@@ -432,8 +491,14 @@ async function main() {
   // ── what remains vouched for ──────────────────────────────────────────────
   console.log("\nwhat this run did NOT prove:")
   if (manifest.genesis) {
-    console.log("  · the genesis SNAPSHOT. Its bytes are pinned, but what it asserts about the pre-log")
-    console.log("    chain era is vouched for, not replayed. That is the system's one trust seam.")
+    if (bedrock) {
+      console.log("  · the sealed archive's signatures were not replayed in this run. The published bedrock")
+      console.log("    lots reconcile genesis exactly and are governance-committed; rebuild them from the")
+      console.log("    archive with tools/build-bedrock-provenance.ts to independently prove their ancestry.")
+    } else {
+      console.log("  · the genesis SNAPSHOT. Its bytes are pinned, but what it asserts about the pre-log")
+      console.log("    chain era is vouched for, not replayed. That is the system's one trust seam.")
+    }
   }
   console.log("  · that you were served the whole record. A publisher can always show a short prefix;")
   console.log("    only an anchor older than the head you hold can catch that. Check the pin on-chain.")
