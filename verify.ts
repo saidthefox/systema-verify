@@ -126,7 +126,7 @@ async function anchoredDigest(rpcUrl: string, height: number): Promise<string | 
 function ownCodeHash(): string | null {
   for (const dir of [join(__dirname, "src", "core"), join(__dirname, "..", "src", "core")]) {
     if (!existsSync(dir)) continue
-    const files = readdirSync(dir).filter(f => f.endsWith(".ts")).sort()
+    const files = readdirSync(dir).filter(f => f.endsWith(".ts") && !f.startsWith("._")).sort()
     const h = createHash("sha256")
     for (const f of files) h.update(f).update("\0").update(readFileSync(join(dir, f)))
     return h.digest("hex")

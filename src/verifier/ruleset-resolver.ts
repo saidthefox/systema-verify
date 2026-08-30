@@ -97,7 +97,9 @@ function createRetainedRulesetLoader(root: string): RulesetLoaderV2 {
     }
 
     const core = join(artifact, "src", "core")
-    const files = readdirSync(core).filter(file => file.endsWith(".ts")).sort()
+    // Filesystem metadata is not law. Keep this filter identical to build-ruleset-artifact.ts;
+    // Docker excludes AppleDouble sidecars and a host verifier must see the same roster.
+    const files = readdirSync(core).filter(file => file.endsWith(".ts") && !file.startsWith("._")).sort()
     const aggregate = createHash("sha256")
     const expectedFiles = Object.keys(manifest.files).sort()
     const actualFiles = files.map(file => `src/core/${file}`)

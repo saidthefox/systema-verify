@@ -10,4 +10,5 @@ artifact. `npm run ruleset:check` is the guard used by tests and publication.
 The first retained bundle is a **compatibility baseline**, not retroactive proof. Protocol-v1
 events never recorded a ruleset hash, and source corrections were not activated by content hash.
 Only an event whose envelope explicitly names one of these hashes can prove which artifact made
-its admission decision. That reference belongs to protocol v2 and is not live yet.
+its admission decision. Protocol v2 carries that reference; historical v1 facts do not acquire it
+retroactively.

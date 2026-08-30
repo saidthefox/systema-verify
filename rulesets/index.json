@@ -28,8 +28,35 @@
       ]
     },
     {
+      "rulesetHash": "654b30879ad715cf701a95fa8c3eefcb10905c1ddf4e1d1fd128b055f32dc7cc",
+      "path": "rulesets/654b30879ad715cf701a95fa8c3eefcb10905c1ddf4e1d1fd128b055f32dc7cc",
+      "status": "candidate",
+      "protocols": [
+        1,
+        2
+      ]
+    },
+    {
+      "rulesetHash": "7a1e29d2e8f61c6a8356410e6c7efb4bdb55bae1e9ec79f18b2b0e56f517d0bb",
+      "path": "rulesets/7a1e29d2e8f61c6a8356410e6c7efb4bdb55bae1e9ec79f18b2b0e56f517d0bb",
+      "status": "candidate",
+      "protocols": [
+        1,
+        2
+      ]
+    },
+    {
       "rulesetHash": "955f3108ad5aafd013405e122196ed8daa50249d6b963793bec4cfcc817ed5ff",
       "path": "rulesets/955f3108ad5aafd013405e122196ed8daa50249d6b963793bec4cfcc817ed5ff",
+      "status": "candidate",
+      "protocols": [
+        1,
+        2
+      ]
+    },
+    {
+      "rulesetHash": "9b151a7b8c6fc092211279f2a3c26940655b7246db41d21f93a99ecc43279e4a",
+      "path": "rulesets/9b151a7b8c6fc092211279f2a3c26940655b7246db41d21f93a99ecc43279e4a",
       "status": "candidate",
       "protocols": [
         1,
