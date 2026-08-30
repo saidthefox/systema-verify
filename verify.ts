@@ -199,6 +199,7 @@ interface Manifest {
   totalEvents: number
   genesis: { file: string; sha256: string } | null
   bedrock?: { file: string; schema: string; sha256: string; archiveThroughBlock: number; eventGenesisHash: string } | null
+  research?: { file: string; schema: string; sha256: string; headSeq: number; stateHash: string }
   segments: { file: string; fromSeq: number; toSeq: number; sha256: string }[]
   tail: { file: string; sha256: string }
   pin: {
@@ -403,6 +404,21 @@ async function main() {
   if (sha256(tail) !== manifest.tail.sha256) { bad("tail.jsonl does not match its manifest hash"); failures++ }
   pieces.push(tail)
   ok(`${manifest.segments.length} sealed segment(s) + tail match their published hashes`)
+
+  if (manifest.research) {
+    const b = await get(base, manifest.research.file)
+    const parsed = JSON.parse(b.toString()) as {
+      schema?: string
+      source?: { record?: { head?: { seq?: number; hash?: string } }; foldedState?: { seq?: number; stateHash?: string } }
+    }
+    if (sha256(b) !== manifest.research.sha256) { bad("research snapshot does not match its manifest hash"); failures++ }
+    else if (parsed.schema !== "systema.research-snapshot.v1" || parsed.schema !== manifest.research.schema) {
+      bad("research snapshot schema does not match its manifest entry"); failures++
+    } else if (parsed.source?.record?.head?.seq !== manifest.head.seq || parsed.source.record.head.hash !== manifest.head.hash ||
+               parsed.source?.foldedState?.seq !== manifest.head.seq || parsed.source.foldedState.stateHash !== manifest.research.stateHash) {
+      bad("research snapshot does not name this manifest's record cut"); failures++
+    } else ok(`research snapshot matches (${(b.length / 1e6).toFixed(1)} MB at head ${manifest.research.headSeq})`)
+  }
 
   let snapshot
   let snapshotJson: string | null = null

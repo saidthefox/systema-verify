@@ -205,6 +205,6 @@
     "rulesets/ee7e5c4efce9f9fa4e70ac5bba5e6ecda9e26a75b5d8a71598b42bd985b861cb/src/core/verify.ts": "1ff71895d7d59cd0486d1ef4a352c49024bf291f8744564156e9c132ba8bed20",
     "src/codec.ts": "79c846de1fe87aa30fe07d602f328ac7d2f570655f1ad831c4a4b57217a25cbc",
     "src/verifier/ruleset-resolver.ts": "64575ab08572c8699bc11aaf7fb2382f92faa8fc1d8f18b346218237e95a279f",
-    "verify.ts": "56798075cc7afa52c9bc904dc164c40a9f23c4cff49928d246976106454c304e"
+    "verify.ts": "3d22be30b6bd968af23cf08df0d8bb156d3de18c14f0ecc6a7decf1f8f07ae92"
   }
 }
