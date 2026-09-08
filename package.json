@@ -2,11 +2,30 @@
   "name": "systema-verify",
   "version": "1.1.0",
   "description": "Verify the Systema Constructum record — fold the published log with the published law and check it against a World Chain anchor.",
+  "keywords": [
+    "systema-constructum",
+    "verification",
+    "append-only-log",
+    "event-sourcing",
+    "world-chain",
+    "ontology"
+  ],
+  "homepage": "https://systema.quartermachines.website",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/saidthefox/systema-verify.git"
+  },
+  "bugs": {
+    "url": "https://github.com/saidthefox/systema-verify/issues"
+  },
   "bin": {
     "systema-verify": "bin/systema-verify"
   },
   "scripts": {
     "verify": "tsx verify.ts"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "license": "MIT",
   "dependencies": {

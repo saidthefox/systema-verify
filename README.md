@@ -1,91 +1,92 @@
 # systema-verify
 
-Check the [Systema Constructum](https://systema.quartermachines.website) record yourself, without
-trusting the people who keep it.
+Independent command-line verification for the public
+[Systema Constructum](https://systema.quartermachines.website) record.
 
-    git clone https://github.com/saidthefox/systems-verify
-    cd systems-verify && npm install
+The verifier downloads or opens a published record, checks every declared artifact, replays the
+record under its retained rulesets, and compares the resulting state commitment with the checkpoint
+published on World Chain. The operator's database and application are not trusted inputs.
+
+## Requirements
+
+- Node.js 20 or newer
+- Network access to the published record and a World Chain JSON-RPC endpoint
+
+## Quick start
+
+    git clone https://github.com/saidthefox/systema-verify.git
+    cd systema-verify
+    npm install
     ./bin/systema-verify https://systema.quartermachines.website/log
 
-## Why this exists
+To verify a local copy instead, pass the directory containing `manifest.json`:
 
-Every other check on that system is run by its operator, on the operator's machine, against the
-operator's copy. That can prove the kingdom is self-consistent. It cannot prove the operator is
-honest, because the same person holds the record and the ruler.
+    ./bin/systema-verify ../systema-record/prod
 
-This closes that. It fetches the published record, folds it with the published law, and compares
-the result against a digest held in a **World Chain contract the keeper cannot rewrite**.
+Use `--rpc <url>` to select another World Chain endpoint. Use `--no-chain` for an explicitly
+local-only replay that does not claim external anchoring.
 
-## What it proves, in order
+## Verification pipeline
 
-Each step refuses to continue if the one before it failed.
+The verifier stops at the first failed stage:
 
-1. **bytes** — every artifact matches the sha256 the manifest promised
-2. **record** — the hash chain, the per-actor puddles, every recomputed envelope hash
-3. **law** — v1 events re-validate under the frozen compatibility reducer; each v2 command/fact
-   group is proved by the exact retained rulebook hash recorded in its cause
-4. **signatures** — from `SIGS_FROM_SEQ` onward, enforced whether or not you asked for it
-5. **anchor** — the folded state's digest is read back **off World Chain** and compared
+1. **Artifact integrity** — every published artifact matches the SHA-256 digest in the manifest.
+2. **Record integrity** — the hash chain, actor streams, and recomputed envelope hashes agree.
+3. **Ruleset replay** — legacy events replay under the frozen compatibility reducer; protocol-v2
+   decisions replay under the exact content-addressed ruleset recorded by each cause.
+4. **Signatures** — signatures are enforced from the recorded activation sequence onward.
+5. **External checkpoint** — the folded state digest is compared with the commitment read from
+   World Chain.
 
-Step 5 is the one that matters, and it is on by default. The contract address is compiled into
-this tool rather than read from the record, because a publisher who could name their own anchor
-could anchor anything. Check it once yourself:
+The checkpoint address is compiled into this verifier rather than accepted from the record being
+checked:
 
-- chain: World Chain mainnet (id `480`)
-- contract: `0x0EFa83693F6c64683B6E4a601BfB6dcfb6BCc720`
-- call: `headAt(<height>)` returns the digest pinned at that height
+- **Network:** World Chain mainnet (chain ID `480`)
+- **Contract:** `0x0EFa83693F6c64683B6E4a601BfB6dcfb6BCc720`
+- **Read:** `headAt(<height>)`
 
-`--rpc <url>` points at a different node; `--no-chain` skips the network entirely and says so
-in the output.
+## Results and exit codes
 
-## What it does NOT prove, and says so every run
+| Exit | Result | Meaning |
+|---:|---|---|
+| 0 | `VERIFIED` | Artifact, record, replay, signature, and checkpoint checks passed. |
+| 1 | `FAILED` | The supplied record failed a verification check. |
+| 2 | error | The run could not complete because of an operational error. |
+| 3 | `INCONCLUSIVE` | This verifier lacks a ruleset or event type required by the record. |
 
-- **The genesis snapshot.** The log begins from a committed state, not from nothing. Its bytes are
-  hash-checked and covered by the pin, so nobody can swap it — but what it *asserts* about the
-  pre-log era is vouched for, not replayed. That is the system's one trust seam and it is named
-  on every run rather than buried here.
-- **That you were served the whole record.** A publisher can always show a shorter prefix. Only an
-  anchor whose seq exceeds the head you hold can catch that.
+`INCONCLUSIVE` is never treated as a pass. Update the repository and run the check again.
 
-## Three verdicts, not two
+## Trust boundaries
 
-| exit | verdict | means |
-|---|---|---|
-| 0 | `VERIFIED` | the bytes, the record, the law, the signatures and the anchor all hold |
-| 1 | `FAILED` | a finding **about the record** |
-| 2 | error | the run itself broke (network, bad path) |
-| 3 | `INCONCLUSIVE` | **this tool is too old to judge that record** |
+The verifier does not establish either of the following:
 
-The third one exists because this package carries a copy of the kingdom's reducer, and a copy goes
-stale on its own: the law gains an event kind, your clone does not have it, and folding stops. That
-is a fact about your copy — the kingdom's sequencer accepted the event under a rulebook that knows
-the kind — so the tool abstains instead of accusing. **`INCONCLUSIVE` is not a pass**, and no
-record can reach `VERIFIED` through it. Fix it with `git pull && npm install`.
+- **The truth of the genesis snapshot.** Its bytes and commitment are checked, but assertions about
+  the pre-log era cannot be reconstructed from later events.
+- **That a publisher served the longest available prefix.** A newer checkpoint whose sequence is
+  above the supplied head can reveal truncation; an unavailable future checkpoint cannot.
 
-This matters more than it sounds. Every other failure mode here is loud and immediate; this one is
-silent, arrives on its own schedule, and would otherwise make a correct record look forged to the
-exact person who came to check whether it was.
+An accepted ontology claim is a recorded governance outcome, not an external certification of its
+factual accuracy.
 
-The law in this package hashes to:
+## Ruleset compatibility
 
-    9b151a7b8c6fc092211279f2a3c26940655b7246db41d21f93a99ecc43279e4a
+The current bundled core hashes to:
 
-Compare that against `pin.codeHash` in any published `manifest.json`. Equal means you hold the
-rulebook that computed that pin. **Different is not automatically wrong** — the kingdom's law moves
-between pins, and re-deriving the same digest under a different rulebook is a stronger result than
-agreement, which the tool will say when it happens.
+    378acbbfde1cea6b86d79fc51252238f33b350cef2f2bd0361b0fe8e7643b767
 
-The package also carries the append-only `rulesets/` registry and source bundles needed to judge
-historical v2 decisions. Each bundle's manifest, file roster, file hashes and aggregate content
-address are checked before its decision proof is imported. If a record names a newer bundle this
-copy does not carry, the verdict is `INCONCLUSIVE`, never `VERIFIED`.
+Compare this value with `pin.codeHash` in a published `manifest.json`. A different hash is not
+automatically a failure: the record can span multiple rulesets, and the verifier retains
+content-addressed historical bundles under `rulesets/`. Each bundle's manifest, file hashes, and
+aggregate address are validated before it is loaded.
 
-## This directory is generated
+## Development and provenance
 
-It is built from the main repository by `tools/build-verify-pkg.ts`, which also runs as a guard
-(`--check`) that fails when this copy has drifted. Do not edit `src/` or `verify.ts` here — fix
-them in the source repository and rebuild, or the two copies of the law start disagreeing again.
-That has already happened once: a hand-made copy went stale in four hours and called a healthy
-kingdom forged.
+This repository is a generated distribution. `SOURCES.json` identifies the generator, bundled
+core hash, and source-file digests. Do not hand-edit `src/core/`, `src/verifier/`, or
+`verify.ts`; those files are regenerated together so the verifier cannot silently drift from the
+rules it claims to replay. See [CONTRIBUTING.md](CONTRIBUTING.md) for the supported workflow.
 
-MIT.
+## License
+
+The verifier software is available under the [MIT License](LICENSE). The public ontology dataset has
+a separate [CC0 dedication and historical-rights boundary](https://systema.quartermachines.website/data-license).

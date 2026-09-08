@@ -10,6 +10,15 @@
       ]
     },
     {
+      "rulesetHash": "378acbbfde1cea6b86d79fc51252238f33b350cef2f2bd0361b0fe8e7643b767",
+      "path": "rulesets/378acbbfde1cea6b86d79fc51252238f33b350cef2f2bd0361b0fe8e7643b767",
+      "status": "candidate",
+      "protocols": [
+        1,
+        2
+      ]
+    },
+    {
       "rulesetHash": "4504cc55b354ec2d6f834f8e938aa0fe2faa5c01f200445b80e48d4005e49a55",
       "path": "rulesets/4504cc55b354ec2d6f834f8e938aa0fe2faa5c01f200445b80e48d4005e49a55",
       "status": "candidate",
@@ -81,8 +90,26 @@
       ]
     },
     {
+      "rulesetHash": "cc340a56a4651a1878a68c7bdc7ca72e11d9f354990d6a8f99aa121c703e2853",
+      "path": "rulesets/cc340a56a4651a1878a68c7bdc7ca72e11d9f354990d6a8f99aa121c703e2853",
+      "status": "candidate",
+      "protocols": [
+        1,
+        2
+      ]
+    },
+    {
       "rulesetHash": "ee7e5c4efce9f9fa4e70ac5bba5e6ecda9e26a75b5d8a71598b42bd985b861cb",
       "path": "rulesets/ee7e5c4efce9f9fa4e70ac5bba5e6ecda9e26a75b5d8a71598b42bd985b861cb",
+      "status": "candidate",
+      "protocols": [
+        1,
+        2
+      ]
+    },
+    {
+      "rulesetHash": "f482478cae2c2be6d5ea2599e0e6cf3d3e90f8c7a123e935e72701db77e0756e",
+      "path": "rulesets/f482478cae2c2be6d5ea2599e0e6cf3d3e90f8c7a123e935e72701db77e0756e",
       "status": "candidate",
       "protocols": [
         1,
