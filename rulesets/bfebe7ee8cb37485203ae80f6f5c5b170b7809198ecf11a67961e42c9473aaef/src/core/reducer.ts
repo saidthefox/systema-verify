@@ -213,9 +213,6 @@ export function validate(state: CoreState, e: Pick<EventEnvelope, "kind" | "v" |
       const rec = state.burns[burnSeq]
       if (!rec) return "COMPENSATION must mirror an existing burn (none recorded at that seq)"
       if (rec.compensated) return "that burn is already compensated — a mirror reflects once"
-      if (dialBool(state.dials, FORGE_PROOF_V3) && state.ingots[`ingot:${burnSeq}`]) {
-        return "a proof-gated Forge burn is irrevocable — compensation would duplicate its external metal"
-      }
       return null
     }
     case "TICK":
@@ -978,11 +975,7 @@ function applyAcceptedV1(state: CoreState, e: EventEnvelope, notes: string[]): O
       state.supply.coinBurnedBase += whole * COIN // the export is a burn; the ERC-721 lives elsewhere
       const houseId = state.actors[e.actor].entityId
       const id = `ingot:${e.seq}`
-      const claimTo = dialBool(state.dials, FORGE_PROOF_V3) ? str(p, "claimTo")! : undefined
-      state.ingots[id] = {
-        id, houseId, entityFp, yieldWhole: Number(whole - dross), drossWhole: Number(dross), ts: e.ts,
-        ...(claimTo ? { claimTo } : {}),
-      }
+      state.ingots[id] = { id, houseId, entityFp, yieldWhole: Number(whole - dross), drossWhole: Number(dross), ts: e.ts }
       state.burns[String(e.seq)] = { fp: entityFp, amountBase: whole * COIN, compensated: false } // mirrorable (A8)
       notes.push(`ingot cast: ${whole - dross} yield, ${dross} dross burned to no one`)
       break

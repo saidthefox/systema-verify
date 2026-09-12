@@ -159,9 +159,6 @@ export interface IngotState {
   yieldWhole: number
   drossWhole: number
   ts: string
-  /** Present only after FORGE_PROOF_V3 activation: the irreversible SMELT commits its eventual
-   * ERC-721 recipient before coins leave Systema. Historical V2 state hashes remain unchanged. */
-  claimTo?: string
   /** Absent means SMELTED. Historical casts predate external-receipt admission, so adding an
    * empty/default status here would move old state hashes. Receipts populate only going forward. */
   forge?: IngotForgeReceipt

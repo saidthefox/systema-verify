@@ -2,6 +2,15 @@
   "format": 1,
   "artifacts": [
     {
+      "rulesetHash": "294fc9996caa6413b7b0ccbf851fb84203fa62958a143b8b0ca9b518aacad782",
+      "path": "rulesets/294fc9996caa6413b7b0ccbf851fb84203fa62958a143b8b0ca9b518aacad782",
+      "status": "candidate",
+      "protocols": [
+        1,
+        2
+      ]
+    },
+    {
       "rulesetHash": "3264becad3ccd1920178fb46b1333b6684c86e5c55ff6790bcde7b44660d0902",
       "path": "rulesets/3264becad3ccd1920178fb46b1333b6684c86e5c55ff6790bcde7b44660d0902",
       "status": "compatibility-baseline",
@@ -37,8 +46,26 @@
       ]
     },
     {
+      "rulesetHash": "634441a358f7a702f3801d26b370dd0bc2339519dfb08d23abf62e0a47d7b1c5",
+      "path": "rulesets/634441a358f7a702f3801d26b370dd0bc2339519dfb08d23abf62e0a47d7b1c5",
+      "status": "candidate",
+      "protocols": [
+        1,
+        2
+      ]
+    },
+    {
       "rulesetHash": "654b30879ad715cf701a95fa8c3eefcb10905c1ddf4e1d1fd128b055f32dc7cc",
       "path": "rulesets/654b30879ad715cf701a95fa8c3eefcb10905c1ddf4e1d1fd128b055f32dc7cc",
+      "status": "candidate",
+      "protocols": [
+        1,
+        2
+      ]
+    },
+    {
+      "rulesetHash": "75d50bd943ba57095b19f3b05bf01382b66eb05d5630324d78b876e13161ba5d",
+      "path": "rulesets/75d50bd943ba57095b19f3b05bf01382b66eb05d5630324d78b876e13161ba5d",
       "status": "candidate",
       "protocols": [
         1,

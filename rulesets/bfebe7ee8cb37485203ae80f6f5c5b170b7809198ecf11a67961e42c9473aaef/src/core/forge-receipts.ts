@@ -12,7 +12,7 @@ export const FORGE_MOLT_CONTRACT = "FORGE_MOLT_CONTRACT"
 const HEX32 = /^0x[0-9a-f]{64}$/
 const ADDRESS = /^0x[0-9a-f]{40}$/
 const UINT = /^(0|[1-9][0-9]*)$/
-const MAX_PROJECTED_TOKEN_ID = 2_147_483_647n // V2: Prisma/Postgres `serial` is a signed Int
+const MAX_PROJECTED_TOKEN_ID = 2_147_483_647n // Prisma/Postgres `serial` is a signed Int
 
 const text = (p: Record<string, unknown>, key: string): string | null =>
   typeof p[key] === "string" && (p[key] as string).length > 0 ? p[key] as string : null
@@ -85,9 +85,7 @@ export function validateIngotForged(state: CoreState, event: Pick<EventEnvelope,
     return "INGOT_FORGED requires canonical positive decimal quantities (logIndex may be zero)"
   }
   if (ingotId !== `ingot:${sourceSeq}`) return "ingotId must name the source SMELT sequence"
-  const proofV3 = dialBool(state.dials, FORGE_PROOF_V3)
-  if (proofV3 && tokenId !== sourceSeq) return "V3 tokenId must equal the canonical source SMELT sequence"
-  if (!proofV3 && tokenId > MAX_PROJECTED_TOKEN_ID) return "tokenId exceeds the projected serial boundary"
+  if (tokenId > MAX_PROJECTED_TOKEN_ID) return "tokenId exceeds the projected serial boundary"
   if (text(p, "chainId") !== realm.chainId || text(p, "contract") !== realm.ingot) return "receipt belongs to a different configured chain or Ingot contract"
   for (const key of ["txHash", "blockHash", "sourceEventHash", "manifestHash", "rulesetHash", "pinDigest", "sourceId"] as const) {
     if (!HEX32.test(text(p, key) ?? "")) return `${key} must be lowercase 0x-prefixed bytes32`
@@ -100,7 +98,6 @@ export function validateIngotForged(state: CoreState, event: Pick<EventEnvelope,
   const ingot = state.ingots[ingotId]
   if (!ingot) return "source SMELT is not in the record"
   if (ingotStatus(ingot) !== "SMELTED") return `ingot is already ${ingotStatus(ingot)}`
-  if (ingot.claimTo && text(p, "to") !== ingot.claimTo) return "receipt recipient disagrees with the source SMELT"
   if (yieldBase !== BigInt(ingot.yieldWhole) * COIN_SCALE || drossBase !== BigInt(ingot.drossWhole) * COIN_SCALE) {
     return "receipt amounts disagree with the source SMELT"
   }
