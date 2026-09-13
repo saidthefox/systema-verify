@@ -16,7 +16,7 @@ published on World Chain. The operator's database and application are not truste
 
     git clone https://github.com/saidthefox/systema-verify.git
     cd systema-verify
-    npm install
+    npm ci
     ./bin/systema-verify https://systema.quartermachines.website/log
 
 To verify a local copy instead, pass the directory containing `manifest.json`:
@@ -72,7 +72,7 @@ factual accuracy.
 
 The current bundled core hashes to:
 
-    294fc9996caa6413b7b0ccbf851fb84203fa62958a143b8b0ca9b518aacad782
+    26c02214e170dc34f16c5f237d72ee469ce843d68e40318efb7daf29c2cec2ac
 
 Compare this value with `pin.codeHash` in a published `manifest.json`. A different hash is not
 automatically a failure: the record can span multiple rulesets, and the verifier retains

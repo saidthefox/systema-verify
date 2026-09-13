@@ -7,6 +7,7 @@ import { CHAIN_TERMINUS_ACT_ID, stateHashOf } from "./src/core/canonical"
 import { stateFromJson } from "./src/codec"
 import type { AnyEventEnvelope } from "./src/core/types"
 import { createRetainedRulesetResolver } from "./src/verifier/ruleset-resolver"
+import { verifyBedrockGenesisBinding } from "./src/verifier/bedrock-genesis"
 import { BEDROCK_ATTESTATION_ID, BEDROCK_SCHEMA, sumBedrockLots, type BedrockManifest } from "./src/core/coin-lots"
 
 /**
@@ -217,7 +218,7 @@ function checkBedrock(
   bedrock: BedrockManifest,
   bedrockHash: string,
   events: AnyEventEnvelope[],
-  snapshotJson: string,
+  snapshotBytes: Buffer,
 ): number {
   let failures = 0
   if (bedrock.schema !== BEDROCK_SCHEMA || bedrock.reconciliation.deltaBase !== "0") {
@@ -225,7 +226,12 @@ function checkBedrock(
   }
   if (bedrock.source.eventGenesis.hash !== events[0].hash) { bad("bedrock manifest names a different event genesis"); failures++ }
   if (bedrock.seam.archiveThrough.block !== 24409) { bad(`bedrock seam is block ${bedrock.seam.archiveThrough.block}, expected the proven cut at 24409`); failures++ }
-  const snapshot = stateFromJson(snapshotJson)
+  const binding = verifyBedrockGenesisBinding(bedrock.source.genesisSnapshot, snapshotBytes)
+  for (const failure of binding.failures) { bad(failure); failures++ }
+  // Do not reconcile lots or derive the governance key from bytes the attested manifest did not
+  // name exactly. Those follow-on checks would make an unbound snapshot look authoritative.
+  if (!binding.snapshot || binding.failures.length) return failures
+  const snapshot = binding.snapshot
   const lotIds = new Set<string>()
   let total = 0n
   for (const entity of bedrock.entities) {
@@ -251,7 +257,7 @@ function checkBedrock(
   if (!attestation) { bad("event log does not contain the bedrock manifest commitment"); failures++ }
   else {
     const prior = events.filter(event => event.seq < attestation.seq)
-    const governance = foldMixedFacts(prior, stateFromJson(snapshotJson)).state.keys.governance
+    const governance = foldMixedFacts(prior, stateFromJson(snapshotBytes.toString("utf8"))).state.keys.governance
     if (attestation.actor !== governance) { bad("bedrock manifest commitment was not made by the governance key"); failures++ }
   }
   if (!failures) ok(`${bedrock.reconciliation.lotCount} bedrock lots exactly reconcile ${total} base units at archive block 24409; governance committed ${bedrockHash.slice(0, 16)}…`)
@@ -420,14 +426,13 @@ async function main() {
     } else ok(`research snapshot matches (${(b.length / 1e6).toFixed(1)} MB at head ${manifest.research.headSeq})`)
   }
 
-  let snapshot
-  let snapshotJson: string | null = null
+  let snapshotBytes: Buffer | null = null
   if (manifest.genesis) {
     const g = await get(base, manifest.genesis.file)
     if (sha256(g) !== manifest.genesis.sha256) { bad("genesis-state.json does not match its manifest hash"); failures++ }
     else ok(`genesis sidecar matches (${(g.length / 1e6).toFixed(1)} MB)`)
-    snapshotJson = g.toString()
-    snapshot = stateFromJson(snapshotJson)
+    snapshotBytes = g
+    stateFromJson(snapshotBytes.toString("utf8"))
   }
   let bedrock: BedrockManifest | null = null
   let bedrockHash: string | null = null
@@ -454,7 +459,9 @@ async function main() {
   console.log("\n2. the record, the law, the signatures")
   // initState MUTATES its snapshot, so the fold below gets its own parse.
   const v = await verifyMixedConstitutionalLog(events, {
-    snapshot: manifest.genesis ? stateFromJson((await get(base, manifest.genesis.file)).toString()) : undefined,
+    // Reparse the same bytes verified in step 1. A remote publisher must not be able to swap a
+    // sidecar between repeated requests after its first response passed the manifest hash.
+    snapshot: snapshotBytes ? stateFromJson(snapshotBytes.toString("utf8")) : undefined,
     resolveRuleset: createRetainedRulesetResolver(retainedRulesetRoot()),
   })
   if (!v.valid && staleLaw(v.reason)) {
@@ -485,7 +492,7 @@ async function main() {
   } else {
     ok(`hash chain, puddles, envelope hashes, reducer validity and signatures: ${v.events} events`)
     reportChainTerminus(events)
-    if (bedrock && bedrockHash && snapshotJson) failures += checkBedrock(bedrock, bedrockHash, events, snapshotJson)
+    if (bedrock && bedrockHash && snapshotBytes) failures += checkBedrock(bedrock, bedrockHash, events, snapshotBytes)
   }
 
   // ── 5. ANCHOR ─────────────────────────────────────────────────────────────
@@ -500,7 +507,7 @@ async function main() {
     const p = manifest.pin
     const bounded = events.filter(e => e.seq <= p.seq)
     // Re-derive the pinned state by applying facts; legality was independently proved above.
-    const { state } = foldMixedFacts(bounded, snapshot ? stateFromJson((await get(base, manifest.genesis!.file)).toString()) : undefined)
+    const { state } = foldMixedFacts(bounded, snapshotBytes ? stateFromJson(snapshotBytes.toString("utf8")) : undefined)
     failures += await checkAnchor(p, { stateHash: stateHashOf(state), logHash: bounded[bounded.length - 1].hash }, { rpcUrl })
   }
 
