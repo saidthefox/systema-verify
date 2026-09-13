@@ -22,7 +22,9 @@
     "systema-verify": "bin/systema-verify"
   },
   "scripts": {
-    "verify": "tsx verify.ts"
+    "verify": "tsx verify.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run typecheck"
   },
   "engines": {
     "node": ">=20"

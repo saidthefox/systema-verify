@@ -1,2 +1,12 @@
-{ "compilerOptions": { "target": "ES2022", "module": "Node16", "strict": true,
-  "esModuleInterop": true, "skipLibCheck": true, "moduleResolution": "Node16" } }
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "Node16",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "moduleResolution": "Node16"
+  },
+  "include": ["verify.ts", "src/**/*.ts"],
+  "exclude": ["node_modules", "rulesets"]
+}

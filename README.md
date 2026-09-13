@@ -86,6 +86,11 @@ core hash, and source-file digests. Do not hand-edit `src/core/`, `src/verifier/
 `verify.ts`; those files are regenerated together so the verifier cannot silently drift from the
 rules it claims to replay. See [CONTRIBUTING.md](CONTRIBUTING.md) for the supported workflow.
 
+`npm test` typechecks the current verifier and current core. Content-addressed directories under
+`rulesets/` are immutable historical programs: the verifier validates their manifest, file roster,
+individual hashes, and aggregate address before loading them at replay time. They are intentionally
+excluded from reinterpretation by the current TypeScript compiler.
+
 ## License
 
 The verifier software is available under the [MIT License](LICENSE). The public ontology dataset has
