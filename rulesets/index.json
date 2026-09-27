@@ -28,6 +28,15 @@
       ]
     },
     {
+      "rulesetHash": "33c2c02f065b8a77e387651ab16ddf109899623ffac2fbf0aebdf6a772b98a96",
+      "path": "rulesets/33c2c02f065b8a77e387651ab16ddf109899623ffac2fbf0aebdf6a772b98a96",
+      "status": "candidate",
+      "protocols": [
+        1,
+        2
+      ]
+    },
+    {
       "rulesetHash": "378acbbfde1cea6b86d79fc51252238f33b350cef2f2bd0361b0fe8e7643b767",
       "path": "rulesets/378acbbfde1cea6b86d79fc51252238f33b350cef2f2bd0361b0fe8e7643b767",
       "status": "candidate",
@@ -64,8 +73,33 @@
       ]
     },
     {
+      "rulesetHash": "63f749598c2b074b7987bf1e3a510ee8af1346b5e4f2bca6430f2213c6c01c26",
+      "path": "rulesets/63f749598c2b074b7987bf1e3a510ee8af1346b5e4f2bca6430f2213c6c01c26",
+      "status": "candidate",
+      "protocols": [
+        1,
+        2
+      ]
+    },
+    {
       "rulesetHash": "654b30879ad715cf701a95fa8c3eefcb10905c1ddf4e1d1fd128b055f32dc7cc",
       "path": "rulesets/654b30879ad715cf701a95fa8c3eefcb10905c1ddf4e1d1fd128b055f32dc7cc",
+      "status": "unrecoverable",
+      "protocols": [
+        1,
+        2
+      ],
+      "unrecoverable": {
+        "reason": "Two manifest-addressed macOS AppleDouble sidecars were not retained and their exact bytes cannot be reconstructed from the surviving corpus.",
+        "missingFiles": [
+          "src/core/._forge-receipts.ts",
+          "src/core/._protocol-v2.ts"
+        ]
+      }
+    },
+    {
+      "rulesetHash": "6a878105d5e62fa3177e72364fcf9f77a0a17110827b4cf891cc885deb5e71c6",
+      "path": "rulesets/6a878105d5e62fa3177e72364fcf9f77a0a17110827b4cf891cc885deb5e71c6",
       "status": "candidate",
       "protocols": [
         1,
@@ -82,8 +116,33 @@
       ]
     },
     {
+      "rulesetHash": "77b338bd5cd602ac729d041860991122d5b38855c2e8ecdf4dfa76da25f921fe",
+      "path": "rulesets/77b338bd5cd602ac729d041860991122d5b38855c2e8ecdf4dfa76da25f921fe",
+      "status": "candidate",
+      "protocols": [
+        1,
+        2
+      ]
+    },
+    {
       "rulesetHash": "7a1e29d2e8f61c6a8356410e6c7efb4bdb55bae1e9ec79f18b2b0e56f517d0bb",
       "path": "rulesets/7a1e29d2e8f61c6a8356410e6c7efb4bdb55bae1e9ec79f18b2b0e56f517d0bb",
+      "status": "unrecoverable",
+      "protocols": [
+        1,
+        2
+      ],
+      "unrecoverable": {
+        "reason": "Two manifest-addressed macOS AppleDouble sidecars were not retained and their exact bytes cannot be reconstructed from the surviving corpus.",
+        "missingFiles": [
+          "src/core/._forge-receipts.ts",
+          "src/core/._protocol-v2.ts"
+        ]
+      }
+    },
+    {
+      "rulesetHash": "8399fd5e9586e4f661b552761d1c6e01971cfaf99e55eba013912577f949cb15",
+      "path": "rulesets/8399fd5e9586e4f661b552761d1c6e01971cfaf99e55eba013912577f949cb15",
       "status": "candidate",
       "protocols": [
         1,
@@ -109,8 +168,26 @@
       ]
     },
     {
+      "rulesetHash": "9c4bd897d0dd02c73b8d91b0ec98a05f7c03217602476c3a2c36dae0b733a3bd",
+      "path": "rulesets/9c4bd897d0dd02c73b8d91b0ec98a05f7c03217602476c3a2c36dae0b733a3bd",
+      "status": "candidate",
+      "protocols": [
+        1,
+        2
+      ]
+    },
+    {
       "rulesetHash": "a1fc681ab0ec4f5caf2a5884ffffc8d63df3ba4ce8e5fdb0007a1bdb3bbba0ca",
       "path": "rulesets/a1fc681ab0ec4f5caf2a5884ffffc8d63df3ba4ce8e5fdb0007a1bdb3bbba0ca",
+      "status": "candidate",
+      "protocols": [
+        1,
+        2
+      ]
+    },
+    {
+      "rulesetHash": "a645c4f7f10f2974e4d07748f08285a7cfb54b0c1bd6f26f5f456b96821556ef",
+      "path": "rulesets/a645c4f7f10f2974e4d07748f08285a7cfb54b0c1bd6f26f5f456b96821556ef",
       "status": "candidate",
       "protocols": [
         1,
@@ -137,6 +214,15 @@
     {
       "rulesetHash": "ee7e5c4efce9f9fa4e70ac5bba5e6ecda9e26a75b5d8a71598b42bd985b861cb",
       "path": "rulesets/ee7e5c4efce9f9fa4e70ac5bba5e6ecda9e26a75b5d8a71598b42bd985b861cb",
+      "status": "candidate",
+      "protocols": [
+        1,
+        2
+      ]
+    },
+    {
+      "rulesetHash": "f3879d983d3d2d4198cad9dcb9bcca6ab87e216b944e0bf59ff46847a452a7f0",
+      "path": "rulesets/f3879d983d3d2d4198cad9dcb9bcca6ab87e216b944e0bf59ff46847a452a7f0",
       "status": "candidate",
       "protocols": [
         1,

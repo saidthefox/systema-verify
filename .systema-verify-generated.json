@@ -1,0 +1,11 @@
+{
+  "schema": "systema.verify-package-owner.v1",
+  "package": "systema-verify",
+  "generator": "systema-constructum/tools/build-verify-pkg.ts",
+  "managedTrees": [
+    "src",
+    "rulesets",
+    "bin"
+  ],
+  "warning": "This marker authorizes the named generator to replace managed package files."
+}

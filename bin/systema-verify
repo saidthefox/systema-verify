@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-// SYSTEMA_VERIFY_NO_AUTORUN keeps the module importable by tests; the shim drives main() itself.
-process.env.SYSTEMA_VERIFY_NO_AUTORUN = "1"
 // A shim, not logic. The verifier is TypeScript because the LAW is TypeScript — shipping a
 // compiled copy would put a third version of the reducer into the world, which is the exact
 // failure this package was rebuilt to prevent. So we run the sources.

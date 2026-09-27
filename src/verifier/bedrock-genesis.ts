@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { hashOf } from "../core/canonical"
 import type { CoreState } from "../core/types"
-import { stateFromJson } from "../codec"
+import { stateFromJson } from "../record/codec"
 
 export interface BedrockGenesisBinding {
   snapshot: CoreState | null

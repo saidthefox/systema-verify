@@ -1,7 +1,7 @@
 # Contributing
 
 `systema-verify` is generated from the same core sources used to replay the Systema Constructum
-record. Direct edits to `src/core/`, `src/verifier/`, `verify.ts`, or retained ruleset bundles
+record. Direct edits to `src/core/`, `src/verifier/`, `src/record/codec.ts`, `verify.ts`, or retained ruleset bundles
 will be overwritten and can make the verifier's claims unreliable.
 
 Use GitHub issues for reproducible verifier failures, compatibility reports, documentation defects,

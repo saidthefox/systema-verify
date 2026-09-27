@@ -1,7 +1,7 @@
 {
   "name": "systema-verify",
   "version": "1.1.0",
-  "description": "Verify the Systema Constructum record — fold the published log with the published law and check it against a World Chain anchor.",
+  "description": "Verify the Systema Constructum record with retained decision rules and compare it with a World Chain checkpoint.",
   "keywords": [
     "systema-constructum",
     "verification",
@@ -31,7 +31,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "tsx": "^4.0.0"
+    "tsx": "4.22.3"
   },
   "devDependencies": {
     "@types/node": "^26.0.0",

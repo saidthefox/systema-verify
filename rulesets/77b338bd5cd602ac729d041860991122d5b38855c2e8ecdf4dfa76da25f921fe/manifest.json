@@ -1,0 +1,40 @@
+{
+  "format": 1,
+  "rulesetHash": "77b338bd5cd602ac729d041860991122d5b38855c2e8ecdf4dfa76da25f921fe",
+  "hashAlgorithm": "sha256 over sorted core filename + NUL + exact file bytes",
+  "protocols": [
+    1,
+    2
+  ],
+  "activation": null,
+  "status": "candidate",
+  "files": {
+    "src/core/activation.ts": "be354b78d4d4fa853e56c8304236c2b54b7c97926c943a4d74a27e2f2695d203",
+    "src/core/canonical.ts": "47715814858ab374bf2ccde164613cd2ca27db8bab7ea75c4ebb894fc4cfcc81",
+    "src/core/coin-lots.ts": "bedf35750a7e2c8e46ec63a7d339805381c21cf220a13353e715a24da750ba5c",
+    "src/core/definitions.ts": "17f2928861ee6c54581c4b7b6636f341394dd10a3afcdcabd018a8b3d6b35e7d",
+    "src/core/dials.ts": "666cd751af1ac0bc19a407766e2f22dc215f9da12495e0aa8e947b8d5f8749f3",
+    "src/core/effects.ts": "52c691abba9cd3950026fbdceabc7b7ecdb59c4c5937e863fabea27fc2915fdb",
+    "src/core/forge-receipts.ts": "376132bf6375fa0fe66fdf2146d41178160e7ce5a5b30ccdad98078eed2ae14d",
+    "src/core/founding-fleet.ts": "432b9a77eb38f47094a47c07df1793504bad79b2330bf41e038edd1e714eb399",
+    "src/core/graph.ts": "b7d302f46e738a7d3fa5be76a925bc60ac608fb67cfed0717262d782ce9b83ea",
+    "src/core/index.ts": "708c4ba87b68917faed33422bb7dceeda19fc77a22e108ebe73c9036d647a3e6",
+    "src/core/ingot-manifest.ts": "ef073af333d4d58bb140bcfdf6a167c9cea94b1a876428a49513c13078034793",
+    "src/core/invariants.ts": "9946321046140ce7e7a285fc5eb06f8d37e293c56521f5438b93a5d2a14e818c",
+    "src/core/ladder.ts": "9d79c7cd897ecf5ba73f678dc6400c06acdb94b0a57c188fa5bffa5f59dc2b86",
+    "src/core/limits.ts": "7d98f13bb0fe7977cd19bfd2148f5f0e94eb426fa80b35b27520d85fb6ed62b4",
+    "src/core/math.ts": "ef53e769c860df774384fd599bc83115f34cd6da876d301ebb38d78a21b2a88b",
+    "src/core/protocol-v2.ts": "2b2667acfcc2c041164bfccb81395af6d5bc6e95c296538b160f49eae22f1962",
+    "src/core/protocol.ts": "e28e6468358ccbd4bfb4bfb7f84cf7c677545dfd278b9e418ad5395efbd78d08",
+    "src/core/reducer.ts": "2e0fbb949206bb40b43a7db5d736ad8ec23dad980d51eb3714ea96d5e42f6a99",
+    "src/core/ruleset-policy.ts": "d6285b44b8720436fdc7af5a2e9b73bf43b348e49ae5a5c9987137b935646704",
+    "src/core/sequencer.ts": "ed608b5d0e64e88aac02a3e3081a6273d76cb679ee8f08601a3d99e3954d928a",
+    "src/core/sortition.ts": "6ab512ccc0d7aae1ea2aebafd229e0e2acf57114942208a6e5daef5c691b23b1",
+    "src/core/types.ts": "a324065d0eed495e275040810976affc6b600b8cf4e4368a4ff730729e1c42d5",
+    "src/core/verify.ts": "83256e9d9b3a5c3f2df96e6e918cc268116774b8887aef9cd86bd386d4b5025c"
+  },
+  "limitations": [
+    "Protocol-v1 events do not carry a rulesetHash, so this artifact is not retroactive evidence of which source admitted them.",
+    "The baseline is retained for forward comparison and for a future recorded protocol activation."
+  ]
+}
