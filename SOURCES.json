@@ -2,13 +2,13 @@
   "schema": "systema.verify-package-sources.v3",
   "generatedBy": "tools/build-verify-pkg.ts",
   "generatorSha256": "0f2292543abe50b4400f7c832a235fbb4c1f416fe485067a32c4d01b8d33378a",
-  "codeHash": "77b338bd5cd602ac729d041860991122d5b38855c2e8ecdf4dfa76da25f921fe",
+  "codeHash": "5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6",
   "packageLockSha256": "b7f42de166eb9867f6850aff87588851e1a199271837eb0ad84dc62c25bdbce6",
-  "generatedFileCount": 579,
+  "generatedFileCount": 603,
   "digestRecipe": "sha256 over UTF-8 lines sorted by path bytes: path + NUL + four-digit octal mode + NUL + (sha256(content) or the declared sentinel for SOURCES.json and FILES.sha256) + LF",
-  "distributionDigest": "c186c910761546eb50bcb6dbb7b7e72e170e9ca67c2f2e468c708b1a4449c54b",
+  "distributionDigest": "e6eff43c08515e182ae5bdb67faf846dae0b9a5a02e28bdfdf4a8d73f42ddf62",
   "retainedRulesets": {
-    "artifacts": 25,
+    "artifacts": 26,
     "unrecoverable": [
       {
         "rulesetHash": "654b30879ad715cf701a95fa8c3eefcb10905c1ddf4e1d1fd128b055f32dc7cc",
@@ -55,7 +55,7 @@
     },
     "README.md": {
       "mode": "0644",
-      "sha256": "ecaf5dfafc8e0634d7d92c4d9e385ad592630f4d1cf4fd0913aee32dab83f14c"
+      "sha256": "a2de9433ef50da594ff3ff4ef79e94a34f1cb12dc6ff45a96572be3031074c97"
     },
     "SECURITY.md": {
       "mode": "0644",
@@ -664,6 +664,102 @@
     "rulesets/507cad2ef7c810411d7efdf6282c1bf69fe8e724f16af52f6492cd52ffb6db1a/src/core/verify.ts": {
       "mode": "0644",
       "sha256": "bc0d6230254e661ed4e674a6bef26deebaad955612dfb3b188494922abec479b"
+    },
+    "rulesets/5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6/manifest.json": {
+      "mode": "0644",
+      "sha256": "b0381aaa10d19285274397e032a677d6a7c837a430e441b81049ec737c918841"
+    },
+    "rulesets/5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6/src/core/activation.ts": {
+      "mode": "0644",
+      "sha256": "be354b78d4d4fa853e56c8304236c2b54b7c97926c943a4d74a27e2f2695d203"
+    },
+    "rulesets/5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6/src/core/canonical.ts": {
+      "mode": "0644",
+      "sha256": "47715814858ab374bf2ccde164613cd2ca27db8bab7ea75c4ebb894fc4cfcc81"
+    },
+    "rulesets/5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6/src/core/coin-lots.ts": {
+      "mode": "0644",
+      "sha256": "bedf35750a7e2c8e46ec63a7d339805381c21cf220a13353e715a24da750ba5c"
+    },
+    "rulesets/5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6/src/core/definitions.ts": {
+      "mode": "0644",
+      "sha256": "17f2928861ee6c54581c4b7b6636f341394dd10a3afcdcabd018a8b3d6b35e7d"
+    },
+    "rulesets/5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6/src/core/dials.ts": {
+      "mode": "0644",
+      "sha256": "5561ecbce712fb425900135e1bdbea0a818f812348daaeeb65df5adff7522143"
+    },
+    "rulesets/5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6/src/core/effects.ts": {
+      "mode": "0644",
+      "sha256": "40441d1665c1e52047c3ebbe52c670816de10fe8f3eb60efc292ea31433d37f2"
+    },
+    "rulesets/5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6/src/core/forge-receipts.ts": {
+      "mode": "0644",
+      "sha256": "376132bf6375fa0fe66fdf2146d41178160e7ce5a5b30ccdad98078eed2ae14d"
+    },
+    "rulesets/5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6/src/core/founding-fleet.ts": {
+      "mode": "0644",
+      "sha256": "432b9a77eb38f47094a47c07df1793504bad79b2330bf41e038edd1e714eb399"
+    },
+    "rulesets/5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6/src/core/graph.ts": {
+      "mode": "0644",
+      "sha256": "b7d302f46e738a7d3fa5be76a925bc60ac608fb67cfed0717262d782ce9b83ea"
+    },
+    "rulesets/5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6/src/core/index.ts": {
+      "mode": "0644",
+      "sha256": "708c4ba87b68917faed33422bb7dceeda19fc77a22e108ebe73c9036d647a3e6"
+    },
+    "rulesets/5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6/src/core/ingot-manifest.ts": {
+      "mode": "0644",
+      "sha256": "ef073af333d4d58bb140bcfdf6a167c9cea94b1a876428a49513c13078034793"
+    },
+    "rulesets/5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6/src/core/invariants.ts": {
+      "mode": "0644",
+      "sha256": "9946321046140ce7e7a285fc5eb06f8d37e293c56521f5438b93a5d2a14e818c"
+    },
+    "rulesets/5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6/src/core/ladder.ts": {
+      "mode": "0644",
+      "sha256": "85f927249bb980c9835df323c286195289bc677463cefc701dffbb647222d9cc"
+    },
+    "rulesets/5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6/src/core/limits.ts": {
+      "mode": "0644",
+      "sha256": "7d98f13bb0fe7977cd19bfd2148f5f0e94eb426fa80b35b27520d85fb6ed62b4"
+    },
+    "rulesets/5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6/src/core/math.ts": {
+      "mode": "0644",
+      "sha256": "ef53e769c860df774384fd599bc83115f34cd6da876d301ebb38d78a21b2a88b"
+    },
+    "rulesets/5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6/src/core/protocol-v2.ts": {
+      "mode": "0644",
+      "sha256": "2b2667acfcc2c041164bfccb81395af6d5bc6e95c296538b160f49eae22f1962"
+    },
+    "rulesets/5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6/src/core/protocol.ts": {
+      "mode": "0644",
+      "sha256": "e28e6468358ccbd4bfb4bfb7f84cf7c677545dfd278b9e418ad5395efbd78d08"
+    },
+    "rulesets/5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6/src/core/reducer.ts": {
+      "mode": "0644",
+      "sha256": "c21fde4f5a97b931f3bbbf256e950b891d15134071447133627338fe9911992e"
+    },
+    "rulesets/5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6/src/core/ruleset-policy.ts": {
+      "mode": "0644",
+      "sha256": "d6285b44b8720436fdc7af5a2e9b73bf43b348e49ae5a5c9987137b935646704"
+    },
+    "rulesets/5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6/src/core/sequencer.ts": {
+      "mode": "0644",
+      "sha256": "ed608b5d0e64e88aac02a3e3081a6273d76cb679ee8f08601a3d99e3954d928a"
+    },
+    "rulesets/5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6/src/core/sortition.ts": {
+      "mode": "0644",
+      "sha256": "6ab512ccc0d7aae1ea2aebafd229e0e2acf57114942208a6e5daef5c691b23b1"
+    },
+    "rulesets/5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6/src/core/types.ts": {
+      "mode": "0644",
+      "sha256": "e7fa939002143ee9740a0b89c25b0ad195450d9c16c022c54152097e9253c67c"
+    },
+    "rulesets/5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6/src/core/verify.ts": {
+      "mode": "0644",
+      "sha256": "83256e9d9b3a5c3f2df96e6e918cc268116774b8887aef9cd86bd386d4b5025c"
     },
     "rulesets/634441a358f7a702f3801d26b370dd0bc2339519dfb08d23abf62e0a47d7b1c5/manifest.json": {
       "mode": "0644",
@@ -2223,7 +2319,7 @@
     },
     "rulesets/index.json": {
       "mode": "0644",
-      "sha256": "c83164a7d94ed2cf9c4cfd560bc94b78585786dee995074d7b8798867352ff82"
+      "sha256": "f5897f33e663b21abf5090d13464ce2e17942c6deb3ba43050bce9b514a2e9a0"
     },
     "src/core/activation.ts": {
       "mode": "0644",
@@ -2243,11 +2339,11 @@
     },
     "src/core/dials.ts": {
       "mode": "0644",
-      "sha256": "666cd751af1ac0bc19a407766e2f22dc215f9da12495e0aa8e947b8d5f8749f3"
+      "sha256": "5561ecbce712fb425900135e1bdbea0a818f812348daaeeb65df5adff7522143"
     },
     "src/core/effects.ts": {
       "mode": "0644",
-      "sha256": "52c691abba9cd3950026fbdceabc7b7ecdb59c4c5937e863fabea27fc2915fdb"
+      "sha256": "40441d1665c1e52047c3ebbe52c670816de10fe8f3eb60efc292ea31433d37f2"
     },
     "src/core/forge-receipts.ts": {
       "mode": "0644",
@@ -2275,7 +2371,7 @@
     },
     "src/core/ladder.ts": {
       "mode": "0644",
-      "sha256": "9d79c7cd897ecf5ba73f678dc6400c06acdb94b0a57c188fa5bffa5f59dc2b86"
+      "sha256": "85f927249bb980c9835df323c286195289bc677463cefc701dffbb647222d9cc"
     },
     "src/core/limits.ts": {
       "mode": "0644",
@@ -2295,7 +2391,7 @@
     },
     "src/core/reducer.ts": {
       "mode": "0644",
-      "sha256": "2e0fbb949206bb40b43a7db5d736ad8ec23dad980d51eb3714ea96d5e42f6a99"
+      "sha256": "c21fde4f5a97b931f3bbbf256e950b891d15134071447133627338fe9911992e"
     },
     "src/core/ruleset-policy.ts": {
       "mode": "0644",
@@ -2311,7 +2407,7 @@
     },
     "src/core/types.ts": {
       "mode": "0644",
-      "sha256": "a324065d0eed495e275040810976affc6b600b8cf4e4368a4ff730729e1c42d5"
+      "sha256": "e7fa939002143ee9740a0b89c25b0ad195450d9c16c022c54152097e9253c67c"
     },
     "src/core/verify.ts": {
       "mode": "0644",
