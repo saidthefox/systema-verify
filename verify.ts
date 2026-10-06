@@ -163,16 +163,23 @@ function ownCodeHash(): string | null {
  * Is this failure about the RECORD, or about the tool holding the ruler?
  *
  * Two classes are unambiguously the tool's: a fact kind its current reducer does not know, or a
- * v2 decision whose retained rulebook is absent from this verifier package. Either means this
- * copy lacks the ruler needed to judge the record. A forger gains nothing by triggering it: the
- * verdict is INCONCLUSIVE, not a pass.
+ * rulebook absent from this verifier package — the one a v2 decision ran under, or the one an
+ * accepted policy fact makes active ("recorded active ruleset … is unavailable", src/core/verify.ts).
+ * The core reaches the second only after the fact that names the ruleset has passed its own
+ * signature and decision checks, so the record has done everything right and this copy merely
+ * lacks the new ruler. Each means this copy cannot judge the record. A forger gains nothing by
+ * triggering it: the verdict is INCONCLUSIVE, not a pass.
+ *
+ * The second phrasing was missed until 2026-10-06: Amendment 15's ruleset 5c529ff6 became active
+ * at seq 16,802, and the published verifier, which predates it, called the kingdom's record
+ * INVALID there (exit 1) instead of abstaining.
  *
  * Kept deliberately narrow. Widening this to other refusals would start excusing real findings,
  * which is the same mistake pointed the other way — and far worse in a tool whose whole value is
  * being believed when it says no.
  */
 export const staleLaw = (reason?: string): boolean =>
-  /unknown event kind|ruleset artifact unavailable/.test(reason ?? "")
+  /unknown event kind|ruleset artifact unavailable|recorded active ruleset [0-9a-f]{64} is unavailable/.test(reason ?? "")
 
 function retainedRulesetRoot(): string {
   for (const root of [join(__dirname, "rulesets"), join(__dirname, "..", "rulesets")]) {

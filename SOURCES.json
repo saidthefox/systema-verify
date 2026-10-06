@@ -4,9 +4,9 @@
   "generatorSha256": "0f2292543abe50b4400f7c832a235fbb4c1f416fe485067a32c4d01b8d33378a",
   "codeHash": "5c529ff6cdc2cfd656fc3b9d70939f975146a5d248e06fa11285ba25797e10b6",
   "packageLockSha256": "b7f42de166eb9867f6850aff87588851e1a199271837eb0ad84dc62c25bdbce6",
-  "generatedFileCount": 603,
+  "generatedFileCount": 604,
   "digestRecipe": "sha256 over UTF-8 lines sorted by path bytes: path + NUL + four-digit octal mode + NUL + (sha256(content) or the declared sentinel for SOURCES.json and FILES.sha256) + LF",
-  "distributionDigest": "e6eff43c08515e182ae5bdb67faf846dae0b9a5a02e28bdfdf4a8d73f42ddf62",
+  "distributionDigest": "8ac67e6a1d0c807dd44cc1bdb5587ffa12cd794abe8402220ae8e3aee006de6e",
   "retainedRulesets": {
     "artifacts": 26,
     "unrecoverable": [
@@ -2437,13 +2437,17 @@
       "mode": "0644",
       "sha256": "773abff2f337cc0ca802fc62fd9e33f7fc6974af7e0226fce5891660c2e90e53"
     },
+    "src/verifier/witness-continuity.ts": {
+      "mode": "0644",
+      "sha256": "697a19a5e9a8f6d28b70158485a09aa0ead513fbdfc2b59c6adc9dc821dc2704"
+    },
     "tsconfig.json": {
       "mode": "0644",
       "sha256": "d9e5cf542216deb5225a29bfef6c784122d748db5a2a70c005af5936462731c3"
     },
     "verify.ts": {
       "mode": "0644",
-      "sha256": "593999a793317c5ab483b4549008d12bfd651d5c8e096829ab24ae137d98be67"
+      "sha256": "c67f74f03b80d1f4043a9c181180fdab1d0d1488ebf31e7bf724d69ee257abef"
     }
   }
 }
