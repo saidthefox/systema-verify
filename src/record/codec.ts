@@ -150,6 +150,19 @@ export function assertCoreState(value: unknown): asserts value is CoreState {
     }
   }
 
+  // Amendment 16 Part B: sealed act markets are absent until the first sealed commitment.
+  if (state.sealed !== undefined) {
+    const sealed = recordField(state, "sealed", [])
+    for (const [target, rawMarket] of Object.entries(sealed)) {
+      const market = recordAt(rawMarket, ["sealed", target])
+      const commits = recordField(market, "commits", ["sealed", target])
+      for (const [fp, rawCommit] of Object.entries(commits)) {
+        const path = ["sealed", target, "commits", fp]
+        requireBigint(recordAt(rawCommit, path), "stakeMilli", path, bigintPaths)
+      }
+    }
+  }
+
   const stakes = recordField(state, "stakes", [])
   for (const [target, rawStakes] of Object.entries(stakes)) {
     const stakeList = Array.isArray(rawStakes)
