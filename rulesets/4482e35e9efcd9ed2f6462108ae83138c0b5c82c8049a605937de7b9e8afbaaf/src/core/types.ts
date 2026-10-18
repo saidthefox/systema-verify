@@ -1,0 +1,498 @@
+/**
+ * systema-core — types. The event envelope and the folded state.
+ *
+ * PURE BY LAW: nothing in src/core may import prisma, next, fetch, env, Date.now or
+ * Math.random. Time arrives inside events; randomness does not exist here. The reducer's
+ * determinism is the product (EVENTS.md, Principle 2).
+ *
+ * All quantities are bigint: coins in base units (1 coin = 10^8), reputation in MILLI-REP
+ * (1 rep = 1000 milli — EVENTS.md D5). Payload JSON carries amounts as decimal strings.
+ */
+
+export const COIN_SCALE = 100_000_000n
+export const REP_SCALE = 1000n
+
+// ── envelope ────────────────────────────────────────────────────────────────
+
+export interface EventEnvelope {
+  seq: number
+  ts: string // ISO-8601, stamped by the sequencer — the ONLY clock the reducer sees
+  kind: string
+  v: number
+  actor: string // chain-key fingerprint, or "system:sequencer"
+  payload: Record<string, unknown>
+  sig: string
+  prev: string
+  entityPrev: string | null
+  hash: string
+}
+
+/** Explicit name for the historical envelope; `EventEnvelope` remains the compatibility name. */
+export type EventEnvelopeV1 = EventEnvelope
+
+/**
+ * The protocol-v1 command accepted by the current sequencer.
+ *
+ * V1 deliberately used the same kind/payload/signature as the event it became. Keep this
+ * shape forever: every existing record depends on the absence of a protocol discriminator.
+ */
+export interface LegacyCommandEnvelope {
+  kind: string
+  v: number
+  actor: string
+  payload: Record<string, unknown>
+  sig: string
+}
+
+/** @deprecated Protocol-v1 name retained for existing callers and historical replay. */
+export type Candidate = LegacyCommandEnvelope
+
+/** Signed intent. A v2 event carries this whole value as its independently verifiable cause. */
+export interface CommandEnvelopeV2 {
+  protocol: 2
+  id: string // client-generated idempotency key
+  command: string
+  v: number // schema version for this command kind
+  actor: string
+  payload: Record<string, unknown>
+  sig: string
+}
+
+export type CommandEnvelope = LegacyCommandEnvelope | CommandEnvelopeV2
+
+/** A v2 fact has no actor signature: the independently signed intent is retained in `cause`. */
+export interface EventCauseV2 {
+  command: CommandEnvelopeV2
+  eventIndex: number
+  rulesetHash: string
+}
+
+export interface EventEnvelopeV2 {
+  protocol: 2
+  seq: number
+  ts: string
+  kind: string
+  v: number // schema version for this fact kind
+  actor: string // author/subject of the fact; the causal caller is cause.command.actor
+  payload: Record<string, unknown>
+  cause: EventCauseV2
+  prev: string
+  entityPrev: string | null
+  hash: string
+}
+
+export type AnyEventEnvelope = EventEnvelopeV1 | EventEnvelopeV2
+
+/** The fact-shaped material a decision returns before the sequencer orders and seals it. */
+export interface EventDraft {
+  kind: string
+  v: number
+  actor: string
+  payload: Record<string, unknown>
+  sig: string
+}
+
+/** Pure admission result. Rejections have no event unless `events` explicitly contains one. */
+export interface Decision {
+  accepted: boolean
+  reason?: string
+  events: EventDraft[]
+  charged?: boolean
+}
+
+export interface FactDraftV2 {
+  kind: string
+  v: number
+  actor: string
+  payload: Record<string, unknown>
+}
+
+export interface DecisionV2 {
+  accepted: boolean
+  reason?: string
+  facts: FactDraftV2[]
+  charged?: boolean
+}
+
+export interface IngotForgeReceipt {
+  chainId: string
+  contract: string
+  txHash: string
+  blockNumber: string
+  blockHash: string
+  logIndex: string
+  tokenId: string
+  to: string
+  sourceEventSeq: string
+  sourceEventHash: string
+  manifestHash: string
+  rulesetHash: string
+  consumedBase: string
+  yieldBase: string
+  drossBase: string
+  pinSeq: string
+  pinDigest: string
+  sourceId: string
+}
+
+export interface IngotMeltReceipt {
+  chainId: string
+  contract: string
+  moltContract: string
+  txHash: string
+  blockNumber: string
+  blockHash: string
+  ingotLogIndex: string
+  moltLogIndex: string
+  tokenId: string
+  by: string
+  sourceId: string
+  yieldBase: string
+  manifestHash: string
+  moltAmount: string
+}
+
+export interface IngotState {
+  id: string
+  houseId: string
+  entityFp: string
+  yieldWhole: number
+  drossWhole: number
+  ts: string
+  /** Present only after FORGE_PROOF_V3 activation: the irreversible SMELT commits its eventual
+   * ERC-721 recipient before coins leave Systema. Historical V2 state hashes remain unchanged. */
+  claimTo?: string
+  /** Absent means SMELTED. Historical casts predate external-receipt admission, so adding an
+   * empty/default status here would move old state hashes. Receipts populate only going forward. */
+  forge?: IngotForgeReceipt
+  melt?: IngotMeltReceipt
+}
+
+// ── state ───────────────────────────────────────────────────────────────────
+
+export type ActKind = "ENTRY" | "DEFINITION" | "EDGE" | "LABEL" | "FACET"
+export type ActStatus = "PROVISIONAL" | "ACCEPTED" | "REJECTED" | "SUPERSEDED"
+export type VoteDir = "ADVANCE" | "STRIKE"
+export type StakeSide = "ATTEST" | "RAID"
+
+/** Terminal-and-gone: a dead act guards no gates and anchors no edges. */
+export const isDead = (s: ActStatus): boolean => s === "REJECTED" || s === "SUPERSEDED"
+
+// ── the plural name gate (Law 39, many-holders — keeper's A+A ruling 2026-08-16) ───────────
+/** Every act currently holding this normalized word, first claimant first. */
+export const nameHolders = (names: Record<string, string[]>, nameNorm: string): string[] =>
+  names[nameNorm] ?? []
+/** Claim a word: append this act to the holder list (idempotent; order = claim order). */
+export function claimName(names: Record<string, string[]>, nameNorm: string, actId: string) {
+  const l = (names[nameNorm] ??= [])
+  if (!l.includes(actId)) l.push(actId)
+}
+/** Release one holder's claim (rejection frees; supersession never calls this — the relic's
+ *  claim outlives it, exactly as live's labelHolders keeps counting a SUPERSEDED entry). */
+export function releaseName(names: Record<string, string[]>, nameNorm: string, actId: string) {
+  const l = names[nameNorm]
+  if (!l) return
+  const i = l.indexOf(actId)
+  if (i >= 0) l.splice(i, 1)
+  if (!l.length) delete names[nameNorm]
+}
+
+export const EDGE_TYPES = new Set([
+  "CONTAINS", "INSTANCE_OF", "DERIVED_FROM", "DEPENDS_ON", "SERVES",
+  "EXPLICIT_FORM_OF", "SUPERSEDES", "SAME_CONSTRUCT_AS", "NAME_COLLISION_WITH",
+])
+/**
+ * Amendment 17 Part N item 5 (keeper's decision 29; Section III's preamble): two edge types no law
+ * defines, refused from activation on a new edge and on a REPLACE successor edge. Edges already filed
+ * with them stand as filed, so they stay in EDGE_TYPES: the fold reads them, and before activation the
+ * door admits them as it always has.
+ */
+export const RETIRED_EDGE_TYPES: ReadonlySet<string> = new Set(["EXPLICIT_FORM_OF", "SUPERSEDES"])
+/** The types the laws define, in Section III's order: what a filer of a retired type files instead. */
+export const LAW_EDGE_TYPES = ["DERIVED_FROM", "DEPENDS_ON", "SERVES", "INSTANCE_OF", "CONTAINS", "NAME_COLLISION_WITH", "SAME_CONSTRUCT_AS"] as const
+export const retiredEdgeTypeError = (edgeType: string): string =>
+  `edge type ${edgeType} is retired: no law defines it (Section III) — file one of the types the laws define: ${LAW_EDGE_TYPES.join(", ")}`
+
+export interface Ruling {
+  status: "ACCEPTED" | "REJECTED"
+  atSeq: number
+  rule: string // "quorum.v1" | "court" — provenance (D1 spec 5)
+}
+
+export interface ActState {
+  id: string
+  kind: ActKind
+  authorFp: string
+  status: ActStatus
+  filedSeq: number
+  contentHash: string
+  // registry-typed fields
+  nameNorm?: string // ENTRY / LABEL — the Law 12 normalized name
+  referent?: "CONCEPT" | "WORD" // ENTRY, Law 3b — what the name points at; absent = THING (the default)
+  entryId?: string // DEFINITION / LABEL
+  version?: number // DEFINITION — the fold's own count (see nextDefinitionVersion); absent on pre-cut acts
+  fromEntryId?: string // EDGE
+  toEntryId?: string // EDGE
+  edgeType?: string // EDGE
+  ruling?: Ruling
+  orphaned?: boolean // struck by cascade/collision/subsumption — author keeps the award (Law 30)
+  canonical?: boolean // a CANONICAL label imported from prod — an implementation row, not an EVENTS act (the diff skips it)
+  subsumedVia?: string // Law 11e — the rung that made this leap derivable
+  supersededBy?: string // Law 30 REPLACE — the successor that took its place
+  // Law 39 collision petition (prospective from the 2026-09-03 keeper ruling). A held word
+  // does not become a second ordinary market merely because the filer supplied a password.
+  // The ENTRY/LABEL is the one judgment target; its derived edge follows that verdict.
+  collisionWithEntryId?: string
+  collisionSense?: string
+  collisionDistinction?: string
+  collisionParentId?: string // derived NAME_COLLISION_WITH edge; never judged/rewarded alone
+  // Amendment 17 Part K (Law 5) — the one filing: an entry filed with its first definition. The ENTRY names
+  // the definition its filing carried; the DEFINITION names the entry whose filing it rode in. While the
+  // entry is provisional the definition spends no slot, holds no in-flight place, has no market and follows
+  // the entry's verdict; from acceptance it is its own record. Set only under the amendment, so no earlier
+  // state hash moves.
+  filingDefinitionId?: string // ENTRY
+  filingParentId?: string // DEFINITION
+  // Amendment 17 Part O item 2 (CORRECT) and Part P rider 2 — the value hash of each part a correction may name, kept
+  // from the act's filing on every act filed after activation (an ENTRY its scope and referent; a DEFINITION its four
+  // trailer fields, its examples clause and its prose, the body before the clause), so the record knows the original
+  // of every part and a definition filed after activation is told from one filed before it. The core holds no text.
+  partHashes?: PartHashes
+  // …and each upheld correction, its own fact: the part, the new value's hash and the hash of the value it replaced
+  // (absent only for an entry filed before activation whose scope was never hashed). Text and contentHash stay as filed.
+  corrections?: CorrectionFact[]
+  awardedRepMilli?: bigint // recorded at acceptance so a clawback negates EXACTLY this
+  holdback?: { heldBase: bigint; released: boolean }
+}
+
+/** Amendment 17 Part O item 2: the parts a correction may name — an ENTRY's scope or referent; a DEFINITION's trailer
+ *  fields or its examples clause. */
+export type CorrectionPart = "scope" | "referent" | "formal" | "substrate" | "horizon" | "explicit" | "examples"
+export const ENTRY_CORRECTION_PARTS: readonly CorrectionPart[] = ["scope", "referent"]
+export const DEFINITION_CORRECTION_PARTS: readonly CorrectionPart[] = ["formal", "substrate", "horizon", "explicit", "examples"]
+/** The value hashes kept from filing: each part a correction may name, and (Part P rider 2) a definition's prose. */
+export type PartHashes = Partial<Record<CorrectionPart | "prose", string>>
+export interface CorrectionFact {
+  challengeId: string
+  part: CorrectionPart
+  valueHash: string
+  replacedHash?: string
+  atSeq: number
+}
+
+export interface OpenVote {
+  dir: VoteDir
+  stakeMilli: bigint
+  ts: string
+}
+
+export interface Stake {
+  fp: string
+  side: StakeSide
+  amountBase: bigint
+  status: "OPEN" | "SETTLED"
+  payoutBase: bigint
+  placedSeq: number
+}
+
+export interface Actor {
+  fp: string
+  entityType: "house" | "lineage" | "agent" | "user" | "system"
+  entityId: string
+  label: string
+  publicKey: string
+  repMilli: bigint // unfloored, like repRaw
+  balanceBase: bigint // coins — the reducer owns what the chain's entities table holds today
+  openStakeMilli: bigint // committed reputation across open votes
+  lastVoteTs: string | null // drives the Law 18 trailing-window bar
+  filing: { slots: number; atTs: string } | null // A7 gate — agents only
+  // Law 38b-i — the seat's house. Absent on actors imported before the identity cleanup
+  // (2026-08-12), and absent by definition on offices, agents and system keys.
+  houseId?: string
+  // Amendment 16 Part H — an agent's model as last declared in the record (AGENT_MODEL_DECLARED).
+  // Absent until a declaration: the founding fleet's models were never recorded, only held in the
+  // operator's database, and an absent field keeps every earlier state hash unchanged.
+  model?: { family: string; version: string | null; atSeq: number }
+}
+
+export interface Attestation {
+  fp: string           // who anchored it
+  actHash: string      // sha256 of the record document
+  atSeq: number
+  inline: boolean      // did the event carry the record itself, or only its hash?
+}
+
+/** Amendment 16 Part B — a sealed act market's open round (see core/sealed.ts). */
+export interface SealedMarket {
+  phase: "COMMIT" | "REVEAL"
+  phaseTs: string
+  round: number
+  commits: Record<string, { hash: string; stakeMilli: bigint; ts: string }> // judge fp → this round's sealed commitment
+}
+
+/** Amendment 16 Part A — a system governance has named to attest outside facts. */
+export interface Attester {
+  name: string         // short public name, unique among live attesters
+  publicKey: string    // the key whose fingerprint is the registry key
+  namedSeq: number
+  retiredSeq?: number  // a retired attester attests no more; its recorded facts stand
+  day?: string         // the UTC day of its latest attestation…
+  count?: number       // …and how many it recorded that day (ATTESTATIONS_PER_DAY)
+}
+
+export interface House {
+  id: string
+  label: string
+  keyFp: string
+  agentFps: string[]
+  credentialHashes: string[]
+}
+
+/** A cognitive-provenance anchor chartered by the court. It deliberately carries no
+ * credential hashes or human seat: those are House/personhood properties. */
+export interface Lineage {
+  id: string
+  slug: string
+  label: string
+  providerClaim: string
+  assurance: "KEEPER_CHARTERED"
+  keyFp: string
+  agentFps: string[]
+}
+
+// ── the contest ladder (Laws 14/24/30/31, Amendment 5E) ─────────────────────
+
+/** screen.v2 lifecycle (sortition + sealed votes). Absent under v1 — the dial decides. */
+export interface ScreenV2 {
+  phase: "JURY" | "COMMIT" | "REVEAL" | "PARKED"
+  phaseTs: string
+  jurySeed?: string // the TICK-derived seed the draw (and every alternate round) extends
+  juryFps?: string[]
+  commits?: Record<string, string> // juror fp → commitHash (one shot, sealed)
+  altRounds?: number
+}
+
+export interface Challenge {
+  id: string // derived: challenge:<targetType>:<targetId>:<seq> (D6)
+  targetType: string
+  targetId: string
+  mode: "STRIKE" | "REPLACE" | "CORRECT" // CORRECT: Amendment 17 Part O item 2, only under the amendment
+  replacementSpec?: Record<string, unknown> // REPLACE — the successor, judged as part of the swap
+  // Amendment 17 Part O item 2 — a correction: the part, the value proposed (as filed) and its value hash
+  correction?: { part: CorrectionPart; value: string; valueHash: string }
+  // Amendment 17 Part O item 2.8 — a REPLACE filed or rebased under the amendment: its successor's body passed the door
+  // then, so the successor is filed after activation and keeps these value hashes when it is seated
+  successorPartHashes?: { entry?: PartHashes; definition?: PartHashes }
+  successorId?: string // stamped when an upheld REPLACE seats it
+  // Amendment 17 Part O item 5 — the referent a drafted ENTRY successor declares (Law 3b), stamped at filing
+  // only under the amendment, as ActState.referent: absent = THING, so no earlier state hash moves.
+  successorReferent?: "CONCEPT" | "WORD"
+  // Amendment 17 Part O item 4 — filed under the amendment (stamped at filing only then, so no earlier state hash
+  // moves): its target's author's own attestation routed nothing, and an upheld STRIKE or REPLACE refunds the
+  // author's own open attestations of the target. Absent: they are settled with the rest, as before.
+  authorAttestRefund?: true
+  // Amendment 17 Part P rider 1 — filed under the amendment: if its target falls with its entry (Law 30's cascade, or a
+  // replaced entry's teardown) while it is live, it concludes VOID in the same ruling. Absent: it runs on, as filed.
+  voidsWithTarget?: true
+  authorFp: string
+  status: "PENDING" | "ACCEPTED" | "REJECTED" | "EXPIRED" | "VOID" // EXPIRED since payoff.v2 (Law 31e); VOID, Part P rider 1
+  filedSeq: number
+  // Law 31e clocks — stamped only under payoff.v2 so no pre-activation state hash moves. A screen
+  // open at activation is stamped by the first tick after it ("counts from activation").
+  filedTs?: string // filing, or the last rebase (Law 31e: a rebase restarts the clock)
+  parkedTs?: string
+  basisHeadId?: string // definition head the screen was framed against; absent before rebase law
+  rebaseCount?: number // number of stale-screen reframings, each with a fresh vote market
+  humanResets?: number // Law 31 dissent resets executed on this screen
+  parked?: boolean // Law 31b-ii — a second dissent sends the screen to the court; the market stands
+  v2?: ScreenV2
+}
+
+export type RaidStatus = "SCREEN" | "COALITION" | "COURT" | "STRUCK" | "UPHELD" | "DISMISSED" | "EXPIRED" | "VOID" // VOID: Part P rider 1
+export const RAID_LIVE: RaidStatus[] = ["SCREEN", "COALITION", "COURT"]
+
+export interface Raid {
+  id: string // derived: raid:<targetType>:<targetId>:<seq> (D6)
+  targetType: string
+  targetId: string
+  status: RaidStatus
+  openedByFp: string
+  frozenAttestBase: bigint | null // the parity target, frozen at advancement
+  advancedTs: string | null
+  humanResets?: number // Law 31 dissent resets executed on this screen
+  parked?: boolean // Law 31b-ii — a second dissent sends the screen to the court; the market stands
+  openedTs?: string // Law 31e clock while SCREEN (payoff.v2)
+  parkedTs?: string // Law 31e clock once parked (payoff.v2)
+  v2?: ScreenV2
+  voidsWithTarget?: true // Amendment 17 Part P rider 1: opened under the amendment (see Challenge.voidsWithTarget)
+}
+
+export interface Supply {
+  coinMintedBase: bigint
+  coinBurnedBase: bigint
+  escrowPoolBase: bigint // staked coins awaiting settlement + accumulated floor dust
+  repMintedMilli: bigint // acceptance awards + concurrence bonuses
+  repBurnedMilli: bigint // unclaimed forfeits + parimutuel floor dust
+}
+
+export interface CoreState {
+  seq: number
+  ts: string
+  dials: Record<string, number | string | boolean>
+  keys: { court: string; governance: string; sequencer: string }
+  actors: Record<string, Actor> // by fingerprint
+  /** Amendment 1 (as amended, 2026-08-18): facts from OUTSIDE the taxonomy, anchored here by
+   *  the system that owns them. Keyed by actId — globally unique per fact, which is what makes
+   *  anchoring idempotent, exactly as the chain's one-block-per-act rule did. */
+  attestations: Record<string, Attestation>
+  /** Amendment 16 Part A — named attesters by fingerprint. Absent until governance names the
+   *  first, so every earlier state hash is unchanged. From then on an attestation's id belongs to
+   *  its attester: it is stored under `<fingerprint>:<actId>` (see attestationOf). */
+  attesters?: Record<string, Attester>
+  /** Amendment 16 Part B — sealed act markets with a round in progress, by target key. Absent
+   *  until the first sealed commitment; an entry is removed when its act is ruled. */
+  sealed?: Record<string, SealedMarket>
+  houses: Record<string, House>
+  lineages: Record<string, Lineage>
+  /** EVERY credential that has ever claimed a house — Law 38's sybil binding. Append-only on
+   *  purpose: if a claim could be forgotten, the same human could unlink and found a second
+   *  house, and one-human-one-house would stop meaning anything. */
+  credentialToHouse: Record<string, string>
+  /** …and the ones that no longer OPEN their house (ALIAS_REVOKED, 2026-08-19). The two facts
+   *  are different and were previously conflated: "has ever been claimed" is permanent, "may be
+   *  used to sign in" is not. Keeping them apart is what lets a credential be revoked without
+   *  weakening the sybil rule — and lets the diff be exact instead of carrying an uncounted line
+   *  that hid a revocation and a projector bug behind the same number. */
+  revokedCredentials: Record<string, { houseId: string; atSeq: number }>
+  acts: Record<string, ActState>
+  challenges: Record<string, Challenge>
+  raids: Record<string, Raid>
+  // ── governance (the amendment machinery, D1 spec 3) ──
+  amendments: Record<string, { docHash: string; activationSeq: number; ratifiedSeq: number }>
+  pendingActivations: { seq: number; id: string; dials: Record<string, number | string | boolean> }[] // sorted by seq
+  laws: Record<string, { docHash: string; atSeq: number }[]> // per-law anchor history, append-only
+  burns: Record<string, { fp: string; amountBase: bigint; compensated: boolean }> // by burn seq — COMPENSATION mirrors these, once
+  flags: Record<string, Record<string, { weightMilli: bigint; ts: string }>> // coherence: targetId → flagger → standing at flag time
+  nudges: Record<string, { id: string; targetType: string; targetId: string; identityFp: string; snapshot: string; placedTs: string; status: "ACTIVE" | "RESOLVED" | "EXPIRED" }>
+  gallery: Record<string, Record<string, VoteDir>> // recorded and INERT — no rule may read it
+  ingots: Record<string, IngotState>
+  // Normalized name → holding act ids (ENTRY/LABEL), ORDERED by claim time — index 0 is the
+  // first claimant, the collision partner every derived edge names. PLURAL since 2026-08-16
+  // (keeper's A+A ruling): Law 39 means what it says — one word may openly name many concepts,
+  // and every accepted binding HOLDS. The single-slot map was a v1 narrowing, retired.
+  names: Record<string, string[]>
+  votes: Record<string, Record<string, OpenVote>> // targetKey → voterFp → open vote
+  stakes: Record<string, Stake[]> // targetKey → stakes
+  supply: Supply
+}
+
+export const targetKey = (targetType: string, targetId: string) => `${targetType}:${targetId}`
+
+export interface Outcome {
+  accepted: boolean
+  reason?: string
+  /** derived consequences of this fold, for projections/tests (not part of state identity) */
+  notes: string[]
+  /** the effects trace — settlement details for the projector (never hashed, never validated) */
+  fx?: import("./effects").Fx[]
+}

@@ -112,6 +112,26 @@ export function amendment16Version(dials: Record<string, unknown>): 0 | 1 {
   if (raw === 1) return 1
   throw new Error(`Amendment 16 v${String(raw)} is ratified but not implemented in this reducer — upgrade before folding`)
 }
+/**
+ * Amendment 17 — type specimens (drafted 2026-10-13; the keeper's decision that a definition names real
+ * instances of what it carves, at the door, the near-miss optional). ABSENT means 0, the rules in force
+ * before it; the amendment's activation sets 1. Same discipline as AMENDMENT_16_VERSION: never add it to
+ * GENESIS_DIALS, and a version this reducer does not implement halts the fold. It rides on Amendment 16
+ * (the examples clause stands before the Law 6 trailer that Amendment 16 enforces), so the dial policy
+ * refuses it without AMENDMENT_16_VERSION; and without both correction-award dials (CORRECT_AWARD_BASE,
+ * CORRECT_AWARD_REP_MILLI), as it refuses Amendment 16 without ATTESTATIONS_PER_DAY.
+ */
+export const AMENDMENT_17_VERSION = "AMENDMENT_17_VERSION"
+/** Amendment 17 Part O item 2: an upheld correction's award, recorded in the amendment's own dials
+ * (1 coin = 100000000 base units; 1 reputation = 1000 milli). Never in GENESIS_DIALS. */
+export const CORRECT_AWARD_BASE = "CORRECT_AWARD_BASE"
+export const CORRECT_AWARD_REP_MILLI = "CORRECT_AWARD_REP_MILLI"
+export function amendment17Version(dials: Record<string, unknown>): 0 | 1 {
+  const raw = dials[AMENDMENT_17_VERSION]
+  if (raw === undefined) return 0
+  if (raw === 1) return 1
+  throw new Error(`Amendment 17 v${String(raw)} is ratified but not implemented in this reducer — upgrade before folding`)
+}
 /** A nonnegative integer dial that may be absent (then `absent`). */
 export const dialBigOr = (dials: Record<string, unknown>, key: string, absent: bigint): bigint =>
   dials[key] === undefined ? absent : dialBig(dials, key)
@@ -143,11 +163,15 @@ const NONNEGATIVE_INTEGER_DIALS = new Set([
   "CHALLENGE_UPHELD_REP_MILLI", "CHALLENGE_UPHELD_COIN_BASE",
   "RAID_MIN_COINS_BASE", "SCREEN_HUMAN_STAKE_MIN_MILLI", "HUMAN_RESET_LIMIT",
   "SEAL_WINDOW_MS", "DISSENT_SLOTS",
+  // Amendment 17 Part O item 2 — what an upheld correction pays (base units; milli-reputation). Zero is
+  // a lawful award; read only on an upheld correction, and required beside AMENDMENT_17_VERSION below.
+  "CORRECT_AWARD_BASE", "CORRECT_AWARD_REP_MILLI",
 ])
 
 const POSITIVE_INTEGER_DIALS = new Set([
   "PAYOFF_RULE_VERSION", // Amendment 15 — absent means 1
   "AMENDMENT_16_VERSION", // Amendment 16 — absent means 0
+  "AMENDMENT_17_VERSION", // Amendment 17 — absent means 0
   "ATTESTATIONS_PER_DAY", // Amendment 16 Part A — per named attester per UTC day
   "FILING_CAP", "FILING_REGEN_MS", "INFLIGHT_CAP", "QUORUM_RULE_VERSION",
   "QUORUM_FLOOR", "QUORUM_CEILING", "JUDGE_WINDOW_MS", "EDGE_DECAY_K",
@@ -235,6 +259,13 @@ export function dialPolicyError(dials: Record<string, unknown>): string | null {
 
   if (dials[AMENDMENT_16_VERSION] !== undefined && dials.ATTESTATIONS_PER_DAY === undefined) {
     return "Amendment 16 needs ATTESTATIONS_PER_DAY (Part A): a named attester's daily limit is part of the law it enacts"
+  }
+  if (dials[AMENDMENT_17_VERSION] !== undefined && dials[AMENDMENT_16_VERSION] === undefined) {
+    return "Amendment 17 needs Amendment 16: the Law 6b examples clause stands before the Law 6 trailer that Amendment 16 enforces"
+  }
+  if (dials[AMENDMENT_17_VERSION] !== undefined &&
+      (dials[CORRECT_AWARD_BASE] === undefined || dials[CORRECT_AWARD_REP_MILLI] === undefined)) {
+    return "Amendment 17 needs CORRECT_AWARD_BASE and CORRECT_AWARD_REP_MILLI (Part O item 2): what an upheld correction pays is part of the law it enacts, so no correction is ever paid from an absent dial"
   }
   const floor = dials.QUORUM_FLOOR
   const ceiling = dials.QUORUM_CEILING

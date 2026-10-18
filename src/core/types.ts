@@ -201,6 +201,17 @@ export const EDGE_TYPES = new Set([
   "CONTAINS", "INSTANCE_OF", "DERIVED_FROM", "DEPENDS_ON", "SERVES",
   "EXPLICIT_FORM_OF", "SUPERSEDES", "SAME_CONSTRUCT_AS", "NAME_COLLISION_WITH",
 ])
+/**
+ * Amendment 17 Part N item 5 (keeper's decision 29; Section III's preamble): two edge types no law
+ * defines, refused from activation on a new edge and on a REPLACE successor edge. Edges already filed
+ * with them stand as filed, so they stay in EDGE_TYPES: the fold reads them, and before activation the
+ * door admits them as it always has.
+ */
+export const RETIRED_EDGE_TYPES: ReadonlySet<string> = new Set(["EXPLICIT_FORM_OF", "SUPERSEDES"])
+/** The types the laws define, in Section III's order: what a filer of a retired type files instead. */
+export const LAW_EDGE_TYPES = ["DERIVED_FROM", "DEPENDS_ON", "SERVES", "INSTANCE_OF", "CONTAINS", "NAME_COLLISION_WITH", "SAME_CONSTRUCT_AS"] as const
+export const retiredEdgeTypeError = (edgeType: string): string =>
+  `edge type ${edgeType} is retired: no law defines it (Section III) — file one of the types the laws define: ${LAW_EDGE_TYPES.join(", ")}`
 
 export interface Ruling {
   status: "ACCEPTED" | "REJECTED"
@@ -235,8 +246,38 @@ export interface ActState {
   collisionSense?: string
   collisionDistinction?: string
   collisionParentId?: string // derived NAME_COLLISION_WITH edge; never judged/rewarded alone
+  // Amendment 17 Part K (Law 5) — the one filing: an entry filed with its first definition. The ENTRY names
+  // the definition its filing carried; the DEFINITION names the entry whose filing it rode in. While the
+  // entry is provisional the definition spends no slot, holds no in-flight place, has no market and follows
+  // the entry's verdict; from acceptance it is its own record. Set only under the amendment, so no earlier
+  // state hash moves.
+  filingDefinitionId?: string // ENTRY
+  filingParentId?: string // DEFINITION
+  // Amendment 17 Part O item 2 (CORRECT) and Part P rider 2 — the value hash of each part a correction may name, kept
+  // from the act's filing on every act filed after activation (an ENTRY its scope and referent; a DEFINITION its four
+  // trailer fields, its examples clause and its prose, the body before the clause), so the record knows the original
+  // of every part and a definition filed after activation is told from one filed before it. The core holds no text.
+  partHashes?: PartHashes
+  // …and each upheld correction, its own fact: the part, the new value's hash and the hash of the value it replaced
+  // (absent only for an entry filed before activation whose scope was never hashed). Text and contentHash stay as filed.
+  corrections?: CorrectionFact[]
   awardedRepMilli?: bigint // recorded at acceptance so a clawback negates EXACTLY this
   holdback?: { heldBase: bigint; released: boolean }
+}
+
+/** Amendment 17 Part O item 2: the parts a correction may name — an ENTRY's scope or referent; a DEFINITION's trailer
+ *  fields or its examples clause. */
+export type CorrectionPart = "scope" | "referent" | "formal" | "substrate" | "horizon" | "explicit" | "examples"
+export const ENTRY_CORRECTION_PARTS: readonly CorrectionPart[] = ["scope", "referent"]
+export const DEFINITION_CORRECTION_PARTS: readonly CorrectionPart[] = ["formal", "substrate", "horizon", "explicit", "examples"]
+/** The value hashes kept from filing: each part a correction may name, and (Part P rider 2) a definition's prose. */
+export type PartHashes = Partial<Record<CorrectionPart | "prose", string>>
+export interface CorrectionFact {
+  challengeId: string
+  part: CorrectionPart
+  valueHash: string
+  replacedHash?: string
+  atSeq: number
 }
 
 export interface OpenVote {
@@ -335,11 +376,26 @@ export interface Challenge {
   id: string // derived: challenge:<targetType>:<targetId>:<seq> (D6)
   targetType: string
   targetId: string
-  mode: "STRIKE" | "REPLACE"
+  mode: "STRIKE" | "REPLACE" | "CORRECT" // CORRECT: Amendment 17 Part O item 2, only under the amendment
   replacementSpec?: Record<string, unknown> // REPLACE — the successor, judged as part of the swap
+  // Amendment 17 Part O item 2 — a correction: the part, the value proposed (as filed) and its value hash
+  correction?: { part: CorrectionPart; value: string; valueHash: string }
+  // Amendment 17 Part O item 2.8 — a REPLACE filed or rebased under the amendment: its successor's body passed the door
+  // then, so the successor is filed after activation and keeps these value hashes when it is seated
+  successorPartHashes?: { entry?: PartHashes; definition?: PartHashes }
   successorId?: string // stamped when an upheld REPLACE seats it
+  // Amendment 17 Part O item 5 — the referent a drafted ENTRY successor declares (Law 3b), stamped at filing
+  // only under the amendment, as ActState.referent: absent = THING, so no earlier state hash moves.
+  successorReferent?: "CONCEPT" | "WORD"
+  // Amendment 17 Part O item 4 — filed under the amendment (stamped at filing only then, so no earlier state hash
+  // moves): its target's author's own attestation routed nothing, and an upheld STRIKE or REPLACE refunds the
+  // author's own open attestations of the target. Absent: they are settled with the rest, as before.
+  authorAttestRefund?: true
+  // Amendment 17 Part P rider 1 — filed under the amendment: if its target falls with its entry (Law 30's cascade, or a
+  // replaced entry's teardown) while it is live, it concludes VOID in the same ruling. Absent: it runs on, as filed.
+  voidsWithTarget?: true
   authorFp: string
-  status: "PENDING" | "ACCEPTED" | "REJECTED" | "EXPIRED" // EXPIRED since payoff.v2 (Law 31e)
+  status: "PENDING" | "ACCEPTED" | "REJECTED" | "EXPIRED" | "VOID" // EXPIRED since payoff.v2 (Law 31e); VOID, Part P rider 1
   filedSeq: number
   // Law 31e clocks — stamped only under payoff.v2 so no pre-activation state hash moves. A screen
   // open at activation is stamped by the first tick after it ("counts from activation").
@@ -352,7 +408,7 @@ export interface Challenge {
   v2?: ScreenV2
 }
 
-export type RaidStatus = "SCREEN" | "COALITION" | "COURT" | "STRUCK" | "UPHELD" | "DISMISSED" | "EXPIRED"
+export type RaidStatus = "SCREEN" | "COALITION" | "COURT" | "STRUCK" | "UPHELD" | "DISMISSED" | "EXPIRED" | "VOID" // VOID: Part P rider 1
 export const RAID_LIVE: RaidStatus[] = ["SCREEN", "COALITION", "COURT"]
 
 export interface Raid {
@@ -368,6 +424,7 @@ export interface Raid {
   openedTs?: string // Law 31e clock while SCREEN (payoff.v2)
   parkedTs?: string // Law 31e clock once parked (payoff.v2)
   v2?: ScreenV2
+  voidsWithTarget?: true // Amendment 17 Part P rider 1: opened under the amendment (see Challenge.voidsWithTarget)
 }
 
 export interface Supply {

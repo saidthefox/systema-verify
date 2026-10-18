@@ -41,6 +41,8 @@ export function actJudgmentError(state: CoreState, actorFp: string, tt: string, 
   const act = state.acts[tid]
   if (!act || act.kind !== tt) return "target not found"
   if (act.collisionParentId) return "a declared collision has one judgment target — judge the filing, not its derived edge (Law 39)"
+  // Amendment 17 Part K item 2: the one filing has one market and one verdict — its definition is judged with it
+  if (act.filingParentId && act.status === "PROVISIONAL") return `the one filing has one market — judge entry ${act.filingParentId}, whose filing carries this definition (Law 5; Amendment 17)`
   if (act.status !== "PROVISIONAL") return "already ruled — nothing left to judge"
   if (act.authorFp === actorFp) return "you cannot judge your own act (Law 15)"
   if (act.collisionWithEntryId) {

@@ -1,11 +1,11 @@
 import type { ActKind, ActState, AnyEventEnvelope, CoreState, EventEnvelope, EventEnvelopeV2, Outcome } from "./types"
-import { EDGE_TYPES, RAID_LIVE, claimName, isDead, nameHolders, releaseName, targetKey } from "./types"
+import { EDGE_TYPES, RAID_LIVE, RETIRED_EDGE_TYPES, claimName, isDead, nameHolders, releaseName, retiredEdgeTypeError, targetKey } from "./types"
 import { CHAIN_TERMINUS_ACT_HASH, CHAIN_TERMINUS_ACT_ID, hashOf, keyFingerprint, sha256 } from "./canonical"
 import { nameNorm, nameShape } from "./names"
 import { LIMITS, firstTooLong } from "./limits"
-import { GENESIS_DIALS, amendment16Version, assertDialPolicy, dialBig, dialBool, dialNum, dialPolicyError, forgeMinimumWhole, payoffRuleVersion } from "./dials"
+import { GENESIS_DIALS, amendment16Version, amendment17Version, assertDialPolicy, dialBig, dialBool, dialNum, dialPolicyError, forgeMinimumWhole, payoffRuleVersion } from "./dials"
 import { activeJudges, lineageOnlyAgentFps, medianActiveRepMilli, quorumCrossing } from "./math"
-import { liveDefinitionFor, nextDefinitionVersion, trailerError } from "./definitions"
+import { examplesError, liveDefinitionFor, nextDefinitionVersion, trailerError } from "./definitions"
 import { beginFx, cascadeEntry, fxCoinCredit, fxCoinDebit, fxStatus, refundMarketVotes, refundOpenStakes, ruleProvisionalAct, takeFx } from "./effects"
 import { instanceAdjacency, ladderVia } from "./graph"
 import { PROTOCOL_V2_FROM_SEQ, protocolActivationDialError } from "./activation"
@@ -18,10 +18,12 @@ import {
 
 export const COLLISION_PETITION_V2 = "COLLISION_PETITION_V2"
 import { houseAgentMintsUsed } from "./founding-fleet"
+import { tongueError } from "./tongue"
+import { definitionPartHashes, entryPartHashes } from "./corrections"
 import { attestationKey, attestationOf, liveAttester } from "./attesters"
 import { actJudgmentError, applyActCommit, applyActReveal, isActMarket, sealedActMarkets, sweepSealedMarkets, validateActCommit, validateActReveal } from "./sealed"
 import {
-  applyCommit, applyContest, applyContestRebase, applyReveal, evaluateChallengeScreen, evaluateRaidScreen,
+  applyCommit, applyContest, applyContestRebase, applyReveal, correctionFeasible, evaluateChallengeScreen, evaluateRaidScreen,
   executeChallengeRuling, executeRaidRuling, expireStaleCoalitions, replaceFeasible,
   staleDefinitionHead, sweepScreens, sweepScreensV2, validateCommit, validateContest, validateContestRebase, validateReveal, validateScreenVote,
 } from "./ladder"
@@ -633,7 +635,17 @@ export function validate(state: CoreState, e: Pick<EventEnvelope, "kind" | "v" |
       if (!act || act.kind !== str(p, "targetType")) return "target not found"
       if (act.collisionParentId) return "a declared collision has one coherence target — flag the filing, not its derived edge (Law 39)"
       const ftt = str(p, "targetType")
-      if (ftt !== "ENTRY" && ftt !== "DEFINITION" && ftt !== "EDGE") return "flags mark entries, definitions, and edges (D10; FACET deleted by the A+A ruling 2026-08-16)"
+      // Amendment 17 Part M item 3 (Laws 36, 39): a provisional label may be flagged INCOHERENT like any other
+      // act. Read when the flag is filed; absent = refused, as before. A canonical name rides with its entry
+      // and is flagged by flagging the filing.
+      const v17 = amendment17Version(state.dials) >= 1
+      if (v17 && ftt === "LABEL") {
+        if (act.canonical) return "the canonical name rides with its ENTRY — flag the entry's filing; only separately filed labels are flagged on their own (Amendment 17)"
+      } else if (ftt !== "ENTRY" && ftt !== "DEFINITION" && ftt !== "EDGE") {
+        return v17
+          ? "flags mark entries, definitions, edges, and separately filed labels (Law 36; Amendment 17)"
+          : "flags mark entries, definitions, and edges (D10; FACET deleted by the A+A ruling 2026-08-16)"
+      }
       if (act.status !== LIVE) return "coherence flags mark still-provisional acts — a ruled act is contested, not flagged"
       if (act.authorFp === e.actor) return "you cannot flag your own act (Law 15)"
       return null
@@ -659,6 +671,10 @@ export function validate(state: CoreState, e: Pick<EventEnvelope, "kind" | "v" |
       if (ntt !== "ENTRY" && ntt !== "EDGE" && ntt !== "DEFINITION") return "a nudge points at an entry, an edge, or a definition (D10)"
       const act = tid ? state.acts[tid] : null
       if (!act || act.kind !== ntt) return "target not found"
+      // Amendment 17 Part K item 2: while its filing is judged, the definition a one filing carried is no target of
+      // its own; attention points at the filing, its entry — as a flag counts there and the gallery and the court
+      // speak there. Only acts filed under the amendment carry the mark.
+      if (act.filingParentId && act.status === LIVE) return `a nudge on the one filing points at its entry ${act.filingParentId}, which carries this definition (Law 33; Amendment 17)`
       let held = 0
       const identityFp = nudgeIdentityFp(state, e)
       for (const id of Object.keys(state.nudges)) {
@@ -691,6 +707,7 @@ export function validate(state: CoreState, e: Pick<EventEnvelope, "kind" | "v" |
       if (!act) return "target not found"
       if (act.kind !== targetType) return "targetType does not match target kind"
       if (act.status !== LIVE) return "the act is ruled — the gallery closes with the market"
+      if (act.filingParentId) return `the gallery's opinion is given on the filing — entry ${act.filingParentId}, which carries this definition (Law 33b; Amendment 17)`
       if (verdict !== "ADVANCE" && verdict !== "STRIKE") return "verdict must be ADVANCE or STRIKE"
       // The human is PSEUDONYMOUS here on purpose: the house signs, and the person is carried
       // only as a hash (EVENTS.md D3). A raw World ID nullifier in an append-only log that is
@@ -758,6 +775,10 @@ export function validate(state: CoreState, e: Pick<EventEnvelope, "kind" | "v" |
           const blocked = replaceFeasible(state, c)
           if (blocked) return `successor cannot materialize: ${blocked}`
         }
+        if (ruling === "ACCEPTED" && c.mode === "CORRECT") {
+          const blocked = correctionFeasible(state, c)
+          if (blocked) return `correction cannot be applied: ${blocked}`
+        }
         return null
       }
       if (tt === "RAID") {
@@ -773,6 +794,7 @@ export function validate(state: CoreState, e: Pick<EventEnvelope, "kind" | "v" |
       // names a type its target does not have, so tightening here refuses nothing history did.
       if (tt && act.kind !== tt) return "target not found"
       if (act.collisionParentId) return "a declared collision follows its filing's verdict — the court does not rule its derived edge separately (Law 39)"
+      if (act.filingParentId && act.status === LIVE) return `the one filing has one verdict — rule entry ${act.filingParentId}, whose filing carries this definition (Law 5; Amendment 17)`
       if (act.kind === "LABEL") return "the court does not rule names directly — labels are the quorum's to judge (P2 mirror, 2026-08-15)"
       if (act.status !== LIVE) return `already ruled: ${act.status}`
       if (act.collisionWithEntryId) {
@@ -799,79 +821,28 @@ function validateFiling(state: CoreState, e: EventEnvelope): string | null {
   if (!kind || !actId || !str(p, "contentHash")) return "actKind, actId, contentHash required"
   if (state.acts[actId]) return "actId already filed"
 
-  // A7 filing gate — both doors (slots + in-flight cap), READ-ONLY here: validation never
-  // mutates; the slot is consumed in apply. Gated on carrying a budget rather than on being an
-  // agent: a seat files under the same cadence (keeper's ruling 2026-08-13). An actor with no
-  // filing record — a system key, or a human imported from a snapshot cut before budgets were
-  // carried — is not gated, which keeps the reducer from inventing a refusal the kingdom never made.
-  if (author.filing && dialBool(state.dials, "A7_ACTIVE")) {
-    const regen = dialNum(state.dials, "FILING_REGEN_MS")
-    const cap = dialNum(state.dials, "FILING_CAP")
-    const regened = Math.floor((Date.parse(e.ts) - Date.parse(author.filing.atTs)) / regen)
-    const slots = Math.min(cap, author.filing.slots + regened)
-    if (slots < 1) return "no filing slots — they regenerate on a fixed cadence (A7 7C)"
-    let inflight = 0
-    for (const id of Object.keys(state.acts)) {
-      const a = state.acts[id]
-      if (a.authorFp !== e.actor || a.status !== LIVE) continue
-      // Mirror live's countInflightActs (reputation.ts) EXACTLY. The cap counts entries,
-      // edges, and definitions only — a name is reach, never a held claim — and a pending
-      // DEFINITION stops counting once its entry is ACCEPTED (keeper's ruling 2026-07-15).
-      if (a.kind !== "ENTRY" && a.kind !== "EDGE" && a.kind !== "DEFINITION") continue
-      if (a.kind === "DEFINITION" && a.entryId && state.acts[a.entryId]?.status === "ACCEPTED") continue
-      inflight++
-    }
-    if (inflight >= dialNum(state.dials, "INFLIGHT_CAP")) return "in-flight cap reached — judge instead (A7 7C.2)"
-  }
+  // A7 filing gate — both doors (slots + in-flight cap), read-only here (filingBudgetError).
+  const budget = filingBudgetError(state, e.actor, e.ts, 1)
+  if (budget) return budget
 
   if (kind === "ENTRY") {
-    const name = str(p, "name")
-    if (!name || !str(p, "scope")) return "ENTRY needs name and scope"
-    const shape = nameShape(state)(name)
-    if (shape) return shape
-    const big = firstTooLong([["scopeJustification", p.scope, LIMITS.SCOPE]])
-    if (big) return big
-    const collisionV2 = dialBool(state.dials, COLLISION_PETITION_V2)
-    if (collisionV2 && !!str(p, "sense") !== !!str(p, "distinction")) return "provide collision sense AND distinction together — neither is an ordinary entry field (Law 39)"
-    // Law 3b — the referent question. Absent means THING (the default, and every pre-3b event).
-    const referent = str(p, "referent")
-    if (referent !== null && referent !== "THING" && referent !== "CONCEPT" && referent !== "WORD") {
-      return "referent must be THING, CONCEPT, or WORD (Law 3b)"
+    // Amendment 17 Part K item 3: the one filing's door, in order — the budget (above: one slot and one
+    // in-flight place for the whole filing), the entry's form, the definition's form, and then the record.
+    // A refusal before the record is free; only a held name without a full petition is charged (chargedRefusal,
+    // protocol-v2.ts). Absent dial = the entry's door as before, the record read after its form.
+    const form = entryFormError(state, p)
+    if (form) return form
+    if (amendment17Version(state.dials) >= 1) {
+      const definition = oneFilingDefinitionError(state, p)
+      if (definition) return definition
     }
-    const held = nameHolders(state.names, nameNorm(state)(name))
-    if (held.length) {
-      if (!collisionV2) {
-        if (!str(p, "sense")) return `name already held (Law 12/39): ${name} — pass a sense to claim it openly (the description that tells the two apart)`
-        return null
-      }
-      // Law 39 / 13-i — the sense is no longer a password through the duplicate gate. It opens
-      // a structured collision PETITION against the first holder: proposed sense plus a
-      // concrete distinction the judges can test side-by-side. No semantic oracle is hidden
-      // here; the court still decides whether this is one construct twice or a genuine split.
-      const holder = state.acts[held[0]]
-      const holderEntry = holder.kind === "ENTRY" ? holder.id : holder.entryId!
-      if (!str(p, "sense") || !str(p, "distinction")) {
-        return `name already held (Law 12/39) by ${holderEntry}: ${name} — a sense alone does not open the door; inspect the holder and petition the collision court with sense AND distinction`
-      }
-      const bigCollision = firstTooLong([
-        ["sense", p.sense, LIMITS.COLLISION_SENSE],
-        ["distinction", p.distinction, LIMITS.COLLISION_DISTINCTION],
-      ])
-      if (bigCollision) return bigCollision
-    } else if (collisionV2 && (str(p, "sense") || str(p, "distinction"))) {
-      return "collision sense and distinction belong only to a held word — this name has no existing holder to distinguish (Law 39)"
-    }
-    return null
+    return entryRecordError(state, p)
   }
   if (kind === "DEFINITION") {
     const entryId = str(p, "entryId")
     if (!entryId || !str(p, "body")) return "DEFINITION needs entryId and body"
-    const big = firstTooLong([["body", p.body, LIMITS.DEFINITION_BODY]])
-    if (big) return big
-    if (amendment16Version(state.dials) >= 1) {
-      const trailer = trailerError(str(p, "body")!)
-      if (trailer) return `${trailer} (Law 6, Amendment 16)`
-    }
+    const form = definitionBodyError(state, str(p, "body")!)
+    if (form) return form
     const entry = state.acts[entryId]
     if (!entry || entry.kind !== "ENTRY" || isDead(entry.status)) return "definition's entry does not stand"
     // The door hashed a version; it must be the one the fold assigns, or the hash describes an
@@ -891,6 +862,9 @@ function validateFiling(state: CoreState, e: EventEnvelope): string | null {
     const big = firstTooLong([["note", p.note, LIMITS.EDGE_NOTE]])
     if (big) return big
     if (!EDGE_TYPES.has(edgeType)) return `edgeType must be one of: ${[...EDGE_TYPES].join(", ")}`
+    // Amendment 17 Part N item 5: the two types no law defines are refused for new edges, free. Absent
+    // dial = admitted as before; edges already filed with them stand as filed.
+    if (amendment17Version(state.dials) >= 1 && RETIRED_EDGE_TYPES.has(edgeType)) return `${retiredEdgeTypeError(edgeType)} (Amendment 17)`
     if (from === to) return "an edge cannot be a self-loop"
     for (const id of [from, to]) {
       const a = state.acts[id]
@@ -914,6 +888,12 @@ function validateFiling(state: CoreState, e: EventEnvelope): string | null {
     const entryId = str(p, "entryId")
     const text = str(p, "text")
     if (!entryId || !text) return "LABEL needs entryId and text"
+    // Amendment 17 Part M item 1 (Law 39; decisions 21 and 36): the tongue is required, a language code the
+    // pinned registry lists, case folded, refused free with its fix. Absent dial = read as recorded, as before.
+    if (amendment17Version(state.dials) >= 1) {
+      const tongue = tongueError(p.lang)
+      if (tongue) return `${tongue} (Amendment 17)`
+    }
     const shape = nameShape(state)(text)
     if (shape) return shape
     const entry = state.acts[entryId]
@@ -960,6 +940,157 @@ function validateFiling(state: CoreState, e: EventEnvelope): string | null {
   }
   if (kind === "FACET") return "FACET filing is retired — a facet is a word's sense-binding (Law 39a), never filed; classify with a typed edge (Laws 7–11c)"
   return `unknown actKind: ${kind}`
+}
+
+/**
+ * A7 filing gate — both doors (slots + in-flight cap), READ-ONLY: validation never mutates; the slot is
+ * consumed in apply. `need` is how many filings the door is asked to admit at once: one for every act (the one
+ * filing of Amendment 17 Part K is one filing, one slot and one in-flight place). Gated on carrying a budget rather than on being an agent: a seat files under the same cadence (keeper's ruling
+ * 2026-08-13). An actor with no filing record — a system key, or a human imported from a snapshot cut before
+ * budgets were carried — is not gated, which keeps the reducer from inventing a refusal the kingdom never made.
+ */
+export function filingBudgetError(state: CoreState, actorFp: string, ts: string, need: number): string | null {
+  const author = state.actors[actorFp]
+  if (!author?.filing || !dialBool(state.dials, "A7_ACTIVE")) return null
+  const regen = dialNum(state.dials, "FILING_REGEN_MS")
+  const cap = dialNum(state.dials, "FILING_CAP")
+  const regened = Math.floor((Date.parse(ts) - Date.parse(author.filing.atTs)) / regen)
+  const slots = Math.min(cap, author.filing.slots + regened)
+  if (slots < need) return "no filing slots — they regenerate on a fixed cadence (A7 7C)"
+  let inflight = 0
+  for (const id of Object.keys(state.acts)) {
+    const a = state.acts[id]
+    if (a.authorFp !== actorFp || a.status !== LIVE) continue
+    // Mirror live's countInflightActs (reputation.ts) EXACTLY. The cap counts entries,
+    // edges, and definitions only — a name is reach, never a held claim — and a pending
+    // DEFINITION stops counting once its entry is ACCEPTED (keeper's ruling 2026-07-15).
+    if (a.kind !== "ENTRY" && a.kind !== "EDGE" && a.kind !== "DEFINITION") continue
+    if (a.kind === "DEFINITION" && a.entryId && state.acts[a.entryId]?.status === "ACCEPTED") continue
+    // Amendment 17 Part K item 1: a filing counts once — the definition its entry's filing carried holds no
+    // place of its own. Only acts filed under the amendment carry the mark.
+    if (a.filingParentId) continue
+    inflight++
+  }
+  if (inflight + need > dialNum(state.dials, "INFLIGHT_CAP")) return "in-flight cap reached — judge instead (A7 7C.2)"
+  return null
+}
+
+/** The entry's form (Part K item 3, step 2): its name's shape, its scope's length, a petition's sense and
+ *  distinction given together, and its referent. Nothing here reads the record. */
+export function entryFormError(state: CoreState, p: Record<string, unknown>): string | null {
+  const name = str(p, "name")
+  if (!name || !str(p, "scope")) return "ENTRY needs name and scope"
+  const shape = nameShape(state)(name)
+  if (shape) return shape
+  const big = firstTooLong([["scopeJustification", p.scope, LIMITS.SCOPE]])
+  if (big) return big
+  const collisionV2 = dialBool(state.dials, COLLISION_PETITION_V2)
+  if (collisionV2 && !!str(p, "sense") !== !!str(p, "distinction")) return "provide collision sense AND distinction together — neither is an ordinary entry field (Law 39)"
+  // Law 3b — the referent question. Absent means THING (the default, and every pre-3b event).
+  const referent = str(p, "referent")
+  if (referent !== null && referent !== "THING" && referent !== "CONCEPT" && referent !== "WORD") {
+    return "referent must be THING, CONCEPT, or WORD (Law 3b)"
+  }
+  return null
+}
+
+/** The record's part of the entry's door (Part K item 3, step 4): whether the name is held, and if it is,
+ *  the petition (Laws 13-i, 39). A refusal here for a held name is the one charged refusal. */
+export function entryRecordError(state: CoreState, p: Record<string, unknown>): string | null {
+  const name = str(p, "name")!
+  const collisionV2 = dialBool(state.dials, COLLISION_PETITION_V2)
+  const held = nameHolders(state.names, nameNorm(state)(name))
+  if (held.length) {
+    if (!collisionV2) {
+      if (!str(p, "sense")) return `name already held (Law 12/39): ${name} — pass a sense to claim it openly (the description that tells the two apart)`
+      return null
+    }
+    // Law 39 / 13-i — the sense is no longer a password through the duplicate gate. It opens
+    // a structured collision PETITION against the first holder: proposed sense plus a
+    // concrete distinction the judges can test side-by-side. No semantic oracle is hidden
+    // here; the court still decides whether this is one construct twice or a genuine split.
+    const holder = state.acts[held[0]]
+    const holderEntry = holder.kind === "ENTRY" ? holder.id : holder.entryId!
+    if (!str(p, "sense") || !str(p, "distinction")) {
+      return `name already held (Law 12/39) by ${holderEntry}: ${name} — a sense alone does not open the door; inspect the holder and petition the collision court with sense AND distinction`
+    }
+    const bigCollision = firstTooLong([
+      ["sense", p.sense, LIMITS.COLLISION_SENSE],
+      ["distinction", p.distinction, LIMITS.COLLISION_DISTINCTION],
+    ])
+    if (bigCollision) return bigCollision
+  } else if (collisionV2 && (str(p, "sense") || str(p, "distinction"))) {
+    return "collision sense and distinction belong only to a held word — this name has no existing holder to distinguish (Law 39)"
+  }
+  return null
+}
+
+/**
+ * A definition body's form, as the definition door reads it under the rule in force (Part C item 2's order):
+ * its length, Law 6's trailer (Amendment 16's five fields; from Amendment 17 four, an epoch refused with its fix,
+ * Part G item 5) and, from Amendment 17, Law 6b's examples clause. Absent dials = the rule before each, so
+ * history folds unchanged. Form only; the judges own whether each example is a genuine member.
+ */
+export function definitionBodyError(state: CoreState, body: string): string | null {
+  const big = firstTooLong([["body", body, LIMITS.DEFINITION_BODY]])
+  if (big) return big
+  const v17 = amendment17Version(state.dials) >= 1
+  if (v17) {
+    const trailer = trailerError(body, 4)
+    if (trailer) return `${trailer} (Amendment 17)`
+  } else if (amendment16Version(state.dials) >= 1) {
+    const trailer = trailerError(body, 5)
+    if (trailer) return `${trailer} (Law 6, Amendment 16)`
+  }
+  if (v17) {
+    const examples = examplesError(body, 4)
+    if (examples) return `${examples} (Amendment 17)`
+  }
+  return null
+}
+
+/** Amendment 17 Part K item 3, step 3: an entry filed after activation without its definition, refused free. */
+export const ONE_FILING_NEEDS_DEFINITION =
+  "an entry is filed with its first definition, as one filing (Law 5; Amendment 17) — file it with its definition: the body, ending with its Law 6b examples clause and its Law 6 trailer"
+
+/** The one filing's definition, as an ACT_FILED ENTRY carries it: `definition: { actId, contentHash, body,
+ *  version? }`. Read only under the amendment; before it the v2 door refuses the one call whole (protocol-v2.ts). */
+export function oneFilingDefinitionShapeError(p: Record<string, unknown>): string | null {
+  const d = p.definition
+  if (d === undefined) return ONE_FILING_NEEDS_DEFINITION
+  if (!d || typeof d !== "object" || Array.isArray(d)) return "the one filing's definition is an object: { actId, contentHash, body } (Law 5; Amendment 17)"
+  const def = d as Record<string, unknown>
+  if (!str(def, "actId") || !str(def, "contentHash") || !str(def, "body")) return "the one filing's definition needs actId, contentHash and body (Law 5; Amendment 17)"
+  if (def.actId === p.actId) return "the one filing's definition needs an actId of its own (Law 5; Amendment 17)"
+  if (def.version !== undefined && def.version !== 1) return `version ${String(def.version)} is stale — a new entry's first definition is version 1; re-file`
+  return null
+}
+
+/**
+ * Amendment 17 Part K item 3: did the entry's door refuse at its fourth step, the record, with exactly this reason?
+ * Only that refusal is ever charged under the amendment (chargedRefusal, protocol-v2.ts); a refusal at the entry's
+ * form or the definition's form is free, whatever words it quotes. (The budget and the act's id are refused in fixed
+ * words that no record refusal shares, so they need no reading here.)
+ */
+export function entryRefusedAtRecord(state: CoreState, p: Record<string, unknown>, reason: string): boolean {
+  if (entryFormError(state, p) !== null) return false
+  if (amendment17Version(state.dials) >= 1 && oneFilingDefinitionError(state, p) !== null) return false
+  return entryRecordError(state, p) === reason
+}
+
+/** The one filing's definition at the door (Part K item 3, step 3): its shape, an id not yet filed, and the
+ *  definition door's own form checks. Read only under Amendment 17. */
+function oneFilingDefinitionError(state: CoreState, p: Record<string, unknown>): string | null {
+  const shape = oneFilingDefinitionShapeError(p)
+  if (shape) return shape
+  const def = p.definition as Record<string, unknown>
+  if (state.acts[def.actId as string]) return "the one filing's definition actId is already filed"
+  // A collision petition's entry derives its NAME_COLLISION_WITH edge as collision:<actId> in the same fact; a
+  // definition under that id would take the edge's place (applyFiling).
+  if (def.actId === `collision:${p.actId as string}`) {
+    return "the one filing's definition actId is the petition's derived edge (collision:<entry actId>) — give the definition an actId of its own (Law 5; Amendment 17)"
+  }
+  return definitionBodyError(state, def.body as string)
 }
 
 function validateVote(state: CoreState, e: EventEnvelope): string | null {
@@ -1358,9 +1489,32 @@ function applyFiling(state: CoreState, e: EventEnvelope, notes: string[]) {
     // ...and the newborn CLAIMS alongside (many-holders, A+A 2026-08-16): entries reserve at
     // filing, freed on rejection; a declared collision makes the word a gem with one more facet.
     claimName(state.names, act.nameNorm, actId)
+    // Amendment 17 Part O item 2: an act filed after activation keeps the value hash of each part a correction may name
+    if (amendment17Version(state.dials) >= 1) act.partHashes = entryPartHashes(p.scope as string, ref)
+    // Amendment 17 Part K item 1 (Law 5): the one filing carries the entry's first definition, filed with it as
+    // a dependent act — version 1, no slot (one was consumed above for the filing), no in-flight place, no
+    // market of its own; it follows the entry's verdict (ruleProvisionalAct) and its flag (applyFlag). Absent
+    // dial: a `definition` key is not read, as before.
+    if (amendment17Version(state.dials) >= 1) {
+      const d = p.definition as Record<string, unknown>
+      const defId = d.actId as string
+      if (state.acts[defId]) throw new Error(`one filing ${actId}: its definition ${defId} would overwrite an act the fold holds`)
+      act.filingDefinitionId = defId
+      const hashes = definitionPartHashes(d.body as string)
+      state.acts[defId] = {
+        id: defId, kind: "DEFINITION", authorFp: e.actor, status: "PROVISIONAL", filedSeq: e.seq,
+        contentHash: d.contentHash as string, entryId: actId, version: 1, filingParentId: actId,
+        ...(hashes ? { partHashes: hashes } : {}),
+      }
+      notes.push(`filed DEFINITION ${defId} with ENTRY ${actId} — one filing (Law 5; Amendment 17)`)
+    }
   } else if (kind === "DEFINITION") {
     act.entryId = p.entryId as string
     act.version = nextDefinitionVersion(state, act.entryId)
+    if (amendment17Version(state.dials) >= 1) {
+      const hashes = definitionPartHashes(p.body as string) // the amended door read the body's parts (Part O item 2)
+      if (hashes) act.partHashes = hashes
+    }
   } else if (kind === "EDGE") {
     act.fromEntryId = p.fromEntryId as string
     act.toEntryId = p.toEntryId as string
@@ -1486,7 +1640,11 @@ function applyStake(state: CoreState, e: EventEnvelope, notes: string[]) {
  *  market refunded (a void is no judgment). */
 function applyFlag(state: CoreState, e: EventEnvelope, notes: string[]) {
   const p = e.payload
-  const tid = p.targetId as string
+  // Amendment 17 Part K item 2: a flag on either part of the one filing is a flag on the filing, counted on
+  // its entry; a void removes both (the cascade below voids the definition with its entry).
+  const flagged = state.acts[p.targetId as string]
+  const tid = flagged?.filingParentId && flagged.status === LIVE ? flagged.filingParentId : p.targetId as string
+  if (tid !== p.targetId) notes.push(`flag on DEFINITION ${flagged.id} counted on its filing, ENTRY ${tid} (Law 36; Amendment 17)`)
   const flagger = state.actors[e.actor]
   ;(state.flags[tid] ??= {})[e.actor] = { weightMilli: flagger.repMilli, ts: e.ts } // standing at flag time; a re-flag refreshes it
   const flags = state.flags[tid]
@@ -1519,9 +1677,26 @@ function applyFlag(state: CoreState, e: EventEnvelope, notes: string[]) {
     refundOpenStakes(state, targetKey(act.kind, act.id), "BOTH")
     if (act.nameNorm) releaseName(state.names, act.nameNorm, act.id) // plural (A+A)
     if (act.kind === "ENTRY") cascadeEntry(state, act.id, notes)
+    // Amendment 17 Part M item 3: a label petition's derived collision edge follows its filing, so it falls
+    // with the void too (an entry petition's falls by the cascade above, its edge starting from the entry).
+    // Only a label flagged under the amendment reaches here: the door refuses a flag on a label before it.
+    if (act.kind === "LABEL") voidCoupledCollision(state, act.id, e.seq, notes)
     delete state.flags[tid]
     notes.push(`voided ${act.kind} ${tid} as incoherent (coherence.v1)`)
   }
+}
+
+/** The derived collision edge coupled to a voided filing, voided with it: no penalty, every market refunded. */
+function voidCoupledCollision(state: CoreState, filingId: string, atSeq: number, notes: string[]) {
+  const collision = state.acts[`collision:${filingId}`]
+  if (!collision || collision.collisionParentId !== filingId || collision.status !== LIVE) return
+  collision.status = "REJECTED"
+  collision.ruling = { status: "REJECTED", atSeq, rule: "coherence.v1.collision" }
+  fxStatus("act-status", collision.id, collision.kind, "REJECTED")
+  refundMarketVotes(state, targetKey(collision.kind, collision.id))
+  refundOpenStakes(state, targetKey(collision.kind, collision.id), "BOTH")
+  delete state.flags[collision.id]
+  notes.push(`collision edge ${collision.id} voided with ${filingId} (Law 39; Amendment 17)`)
 }
 
 /** Law 33 — the return no path can bypass: a nudge comes home when its target's implied

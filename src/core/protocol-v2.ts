@@ -3,8 +3,9 @@ import type {
   FactDraftV2,
 } from "./types"
 import { canonical, keyFingerprint } from "./canonical"
-import { activatePending, evolveV1, validate } from "./reducer"
+import { activatePending, entryRefusedAtRecord, evolveV1, validate } from "./reducer"
 import { liveDefinitionFor } from "./definitions"
+import { amendment17Version } from "./dials"
 import {
   commandEnvelopeV2Error, commandIdentityV2, sealEventV2, verifyEnvelopeChain,
 } from "./protocol"
@@ -66,13 +67,24 @@ function stateAtNextSeq(state: CoreState): CoreState {
   return view
 }
 
-function chargedRefusal(command: CommandEnvelopeV2, reason: string): FactDraftV2 | null {
+/**
+ * The charged refusals (Law 28): a duplicate edge, a held name without a full petition, a held word. Read from the
+ * refusal's words, as every ruleset before Amendment 17 reads them — history re-decides through this test, so with
+ * the dial absent it is unchanged.
+ *
+ * Amendment 17 Part K item 3: the one filing's door reads the definition's form (step 3) before the record (step 4),
+ * and a refusal before the record is free. A definition-form refusal can quote the player's own words — a trailer
+ * field or an example reading "already held" — so under the amendment an ENTRY is charged only when its door
+ * refused at the record, with that very reason (entryRefusedAtRecord), and never on the words alone.
+ */
+function chargedRefusal(view: CoreState, command: CommandEnvelopeV2, reason: string): FactDraftV2 | null {
   if (command.command !== "FileAct") return null
   const actKind = command.payload.actKind
   if (typeof actKind !== "string") return null
   const charged =
     (actKind === "EDGE" && /already exists|already derivable/.test(reason)) ||
-    (actKind === "ENTRY" && /already held|pass a sense/.test(reason)) ||
+    (actKind === "ENTRY" && /already held|pass a sense/.test(reason) &&
+      (amendment17Version(view.dials) < 1 || entryRefusedAtRecord(view, command.payload, reason))) ||
     (actKind === "LABEL" && /already holds|word already held/.test(reason))
   return charged ? {
     kind: "FILING_REFUSED",
@@ -137,6 +149,20 @@ function ceremonyFactV2(state: CoreState, command: CommandEnvelopeV2): FactDraft
   return { kind: "ENTITY_REGISTERED", v: 2, actor: entityFp, payload: factPayload }
 }
 
+const isOneFiling = (command: CommandEnvelopeV2): boolean =>
+  command.command === "FileAct" && command.payload.actKind === "ENTRY" && command.payload.definition !== undefined
+
+/**
+ * Amendment 17 Part K item 8 (keeper's decisions 35, 43, 45 and 51): the one call — an entry carrying its first
+ * definition — is refused whole, free, until the amendment is in force at the next seq. Play is paused through the
+ * ceremony, so nothing files between the `DIAL_SET` that selects this ruleset and the `activationSeq`; the app
+ * refuses the call before it (lib/oneFiling.ts) on the selected ruleset and the dial both. The fact door (`validate`)
+ * does not read a `definition` key with the dial absent, so an ENTRY fact keeps its old meaning.
+ */
+export const ONE_FILING_NOT_IN_FORCE =
+  "the one filing — an entry carrying its first definition in one call — opens with Amendment 17 (Law 5; Part K item 8): " +
+  "until then file the entry alone, then its definition; nothing was recorded or charged"
+
 /** Pure v2 admission: imperative intent maps to a fact, then the current rule validates it. */
 export function decideV2(state: CoreState, command: CommandEnvelopeV2, ts: string): DecisionV2 {
   const shape = commandEnvelopeV2Error(command)
@@ -146,6 +172,7 @@ export function decideV2(state: CoreState, command: CommandEnvelopeV2, ts: strin
   if (!kind) return { accepted: false, reason: `unknown v2 command: ${command.command}`, facts: [] }
 
   const view = stateAtNextSeq(state)
+  if (isOneFiling(command) && amendment17Version(view.dials) < 1) return { accepted: false, reason: ONE_FILING_NOT_IN_FORCE, facts: [] }
   const ceremony = ceremonyFactV2(view, command)
   if (typeof ceremony === "string") return { accepted: false, reason: ceremony, facts: [] }
   // Nudge v2 can separate governance (the signer for an authenticated unseated human) from the
@@ -173,12 +200,14 @@ export function decideV2(state: CoreState, command: CommandEnvelopeV2, ts: strin
     if (live) {
       reason = live.status === "ACCEPTED"
         ? `entry already has confirmed definition ${live.id} — correct it by contesting that definition with mode REPLACE (Law 30)`
-        : `entry already has provisional definition ${live.id} — judge that carving before filing another`
+        : live.filingParentId
+          ? `entry already has provisional definition ${live.id}, filed with it as one filing — judge the entry (Law 5; Amendment 17)`
+          : `entry already has provisional definition ${live.id} — judge that carving before filing another`
     }
   }
   if (!reason) return { accepted: true, facts: [fact] }
 
-  const refusal = chargedRefusal(command, reason)
+  const refusal = chargedRefusal(view, command, reason)
   if (!refusal) return { accepted: false, reason, facts: [] }
   const refusalError = validate(view, { ...refusal, ts })
   if (refusalError) return { accepted: false, reason: `${reason}; charged refusal could not be recorded: ${refusalError}`, facts: [] }

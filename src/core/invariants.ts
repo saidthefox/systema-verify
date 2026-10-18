@@ -78,6 +78,13 @@ const contestLifecycle: Check = s => {
     if (RAID_LIVE.includes(r.status)) liveRaidTargets.set(r.targetId, (liveRaidTargets.get(r.targetId) ?? 0) + 1)
   }
   for (const [t, n] of liveRaidTargets) if (n > 1) return `${n} live raids on ${t}`
+  // one live contest of any kind per target (Law 30 as Amendment 17 states it; the door has always kept it)
+  for (const t of pendingByTarget.keys()) if (liveRaidTargets.has(t)) return `a live challenge and a live raid both on ${t} — one live contest per target`
+  // a correction carries its part and value (Amendment 17 Part O item 2)
+  for (const id of Object.keys(s.challenges)) {
+    const c = s.challenges[id]
+    if ((c.mode === "CORRECT") !== !!c.correction) return `challenge ${id} is mode ${c.mode} ${c.correction ? "with" : "without"} a correction`
+  }
   // a finished raid leaves no RAID coins open on its target (unless a NEW raid reopened it)
   for (const id of Object.keys(s.raids)) {
     const r = s.raids[id]
@@ -202,6 +209,23 @@ const rulingsCarryProvenance: Check = s => {
   return null
 }
 
+// Amendment 17 Part K: the one filing's definition follows its entry's verdict — while either is provisional,
+// both are, and the two name each other.
+const oneFilingFollowsEntry: Check = s => {
+  for (const id of Object.keys(s.acts)) {
+    const d = s.acts[id]
+    if (!d.filingParentId) continue
+    const entry = s.acts[d.filingParentId]
+    if (d.kind !== "DEFINITION" || entry?.kind !== "ENTRY" || d.entryId !== entry.id || entry.filingDefinitionId !== id) {
+      return `one-filing definition ${id} and entry ${d.filingParentId} do not name each other`
+    }
+    if ((d.status === "PROVISIONAL") !== (entry.status === "PROVISIONAL")) {
+      return `one-filing definition ${id} is ${d.status} while its entry ${entry.id} is ${entry.status}`
+    }
+  }
+  return null
+}
+
 const nudgeHand: Check = s => {
   const held = new Map<string, number>()
   for (const id of Object.keys(s.nudges)) {
@@ -223,6 +247,7 @@ export const INVARIANTS: Record<string, Check> = {
   lineageMembership,
   rulingsCarryProvenance,
   contestLifecycle,
+  oneFilingFollowsEntry,
   nudgeHand,
 }
 

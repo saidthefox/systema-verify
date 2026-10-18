@@ -1,15 +1,20 @@
 import type { ActState, Challenge, CoreState, EventEnvelope, Raid, ScreenV2 } from "./types"
-import { EDGE_TYPES, RAID_LIVE, isDead, targetKey, claimName, nameHolders } from "./types"
+import { EDGE_TYPES, RAID_LIVE, RETIRED_EDGE_TYPES, isDead, targetKey, claimName, nameHolders, retiredEdgeTypeError } from "./types"
 import { nameShapeErrorV16, sha256 } from "./canonical"
 import { nameNorm } from "./names"
 import { LIMITS, firstTooLong } from "./limits"
-import { amendment16Version, dialBig, dialBool, dialNum, dialNumOr, payoffRuleVersion } from "./dials"
+import { CORRECT_AWARD_BASE, CORRECT_AWARD_REP_MILLI, amendment16Version, amendment17Version, dialBig, dialBool, dialNum, dialNumOr, payoffRuleVersion } from "./dials"
+import {
+  CORRECT_UPHELD, CORRECT_UPHELD_REFUND, correctionPartsFor, correctionValueError, definitionPartHashes, entryPartHashes,
+  partHash, restoresReplacedValue, standingPartHash,
+} from "./corrections"
+import type { CorrectionPart, PartHashes } from "./types"
 import { activeJudges, lineageOnlyAgentFps, quorumCrossing, quorumMinJudges } from "./math"
-import { acceptedDefinitionHead, nextDefinitionVersion, trailerError } from "./definitions"
+import { acceptedDefinitionHead, definitionPartsA17, examplesError, nextDefinitionVersion, trailerError } from "./definitions"
 import { drawJury, drawSeed, eligibleJurors, jurySize, nextSeed } from "./sortition"
 import {
   freeName, fxActSync, fxCoinCredit, fxCoinDebit, fxRep, fxStatus, refundMarketVotes, refundOpenStakes, ruleProvisionalAct, settleMarketVotes,
-  settleOpenStakes, softHardF, strikeConfirmed, supersedeReplaced,
+  settleOpenStakes, softHardF, strikeConfirmed, supersedeReplaced, voidContestsOn,
 } from "./effects"
 
 /**
@@ -67,12 +72,48 @@ export function liveRaidFor(state: CoreState, targetId: string): Raid | null {
   return null
 }
 
-const hasLiveAttestation = (state: CoreState, key: string): boolean =>
-  (state.stakes[key] ?? []).some(s => s.status === "OPEN" && s.side === "ATTEST")
+/** Amendment 17 Part O item 4.2: the coin reason of the author's own attestations refunded on an upheld challenge
+ *  (a return from escrow, as STAKE_REFUND; its own name so the trace says which refund it was). */
+export const AUTHOR_ATTEST_REFUND = "AUTHOR_ATTEST_REFUND"
+
+/** Amendment 17 Part O item 3.2: the refusal of a REPLACE on an attested act, the draft's text word for word. */
+export const ATTESTED_REPLACE_REFUSED = "attested: a raid can only strike; use CORRECT for a part, or STRIKE with coins"
+
+/**
+ * An open attestation routes a contest to a raid. Amendment 17 Part O item 4 (decision 33; Laws 20, 22-i, 24,
+ * 31, 32): only another player's — an act is attested, for routing, when someone other than its author has an
+ * open attestation on it. `author` is passed only when the amendment is in force at the contest's filing; without
+ * it any open attestation routes, the author's own included, as before.
+ */
+const hasLiveAttestation = (state: CoreState, key: string, author?: string): boolean =>
+  (state.stakes[key] ?? []).some(s => s.status === "OPEN" && s.side === "ATTEST" && s.fp !== author)
+
+/** Whether a contest filed now on this target routes to a raid (read at the contest's filing seq). */
+function attestedForRouting(state: CoreState, tt: string, tid: string): boolean {
+  const author = amendment17Version(state.dials) >= 1 ? state.acts[tid]?.authorFp : undefined
+  return hasLiveAttestation(state, targetKey(tt, tid), author)
+}
+
+/** Amendment 17 Part O item 4.4: a raid opened before the amendment runs on as it was opened. A target only its
+ *  author attests no longer routes to it, and a challenge beside a live raid would put one act on two screens. */
+export const RAID_RUNS_ON = "a raid on this act is live and runs on as it was opened (Law 24) — contest the act when it concludes (Amendment 17)"
+
+/** The raid on this target still live once applyContest's join-sweep (expireStaleCoalitions) has run at `nowTs`:
+ *  a COALITION past RAID_COALITION_TTL_MS is expired by that sweep before routing, so the door does not count it. */
+function liveRaidAfterSweep(state: CoreState, targetId: string, nowTs: string): Raid | null {
+  const ttl = dialNum(state.dials, "RAID_COALITION_TTL_MS")
+  for (const id of Object.keys(state.raids).sort()) {
+    const r = state.raids[id]
+    if (r.targetId !== targetId || !RAID_LIVE.includes(r.status)) continue
+    if (r.status === "COALITION" && r.advancedTs && Date.parse(nowTs) - Date.parse(r.advancedTs) >= ttl) continue
+    return r
+  }
+  return null
+}
 
 // ── the one door (Law 31) ───────────────────────────────────────────────────
 
-export function validateContest(state: CoreState, e: Pick<EventEnvelope, "actor" | "payload">): string | null {
+export function validateContest(state: CoreState, e: Pick<EventEnvelope, "actor" | "payload" | "ts">): string | null {
   const p = e.payload
   // The court and its offices contest without stake or burn (keeper's ruling 2026-08-15): their
   // office is to put questions to the population, not to wager against it. Live exempts the
@@ -93,6 +134,9 @@ export function validateContest(state: CoreState, e: Pick<EventEnvelope, "actor"
   if (!str(p, "reasoning")) return "reasoning is required — a contest without a defect teaches no one"
   const bigC = firstTooLong([["reasoning", str(p, "reasoning")!, LIMITS.REASONING]])
   if (bigC) return bigC
+  // Amendment 17 Part O item 2: a correction, read when the contest is filed. With the dial absent the mode is
+  // refused below exactly as any other unknown mode is today.
+  if (str(p, "mode") === "CORRECT" && amendment17Version(state.dials) >= 1) return validateCorrection(state, e, exempt)
   // the defect names WHICH law the target offends — same whitelist as the live door.
   // REQUIRED from Amendment 14's activation seq, optional before it. The gate is a DIAL the
   // amendment sets through activatePending, not an edit to this function, because a replay must
@@ -108,10 +152,10 @@ export function validateContest(state: CoreState, e: Pick<EventEnvelope, "actor"
   const mode = str(p, "mode") ?? "STRIKE"
   if (mode !== "STRIKE" && mode !== "REPLACE") return "mode must be STRIKE (remove) or REPLACE (seat a successor, Law 30)"
   if (mode === "REPLACE") {
-    const specErr = replaceSpecError(str(p, "targetType") ?? "", p.replacementSpec)
+    const specErr = replaceSpecError(str(p, "targetType") ?? "", p.replacementSpec, amendment17Version(state.dials) >= 1)
     if (specErr) return specErr
     if (amendment16Version(state.dials) >= 1) {
-      const doorErr = replaceSpecDoorError(str(p, "targetType") ?? "", p.replacementSpec as Record<string, unknown>)
+      const doorErr = replaceSpecDoorError(str(p, "targetType") ?? "", p.replacementSpec as Record<string, unknown>, amendment17Version(state.dials) >= 1)
       if (doorErr) return doorErr
     }
   }
@@ -123,12 +167,21 @@ export function validateContest(state: CoreState, e: Pick<EventEnvelope, "actor"
     const head = acceptedDefinitionHead(state, act.entryId!)
     if (head && head.id !== tid) return `contest the current accepted definition ${head.id}, not an earlier carving`
   }
+  // Amendment 17 Part P rider 2 (Law 30; decisions 47 and 50): a REPLACE that only corrects is a correction's
+  if (mode === "REPLACE" && tt === "DEFINITION" && amendment17Version(state.dials) >= 1 &&
+      replaceOnlyCorrects(act, String((p.replacementSpec as Record<string, unknown>).body))) return REPLACE_ONLY_CORRECTS
   // shadow parity: the emitter may carry prod's own contest id so screen votes join across
   // systems (the ACT_FILED/actId move, applied to contests)
   const cid = str(p, "contestId")
   if (cid && (state.challenges[cid] || state.raids[cid])) return "contestId already used"
   if (liveChallengeFor(state, tid)) return "this act already has a live contest on the challenge screen — judge that instead (one live contest per target)"
-  if (hasLiveAttestation(state, targetKey(tt, tid))) {
+  const attested = attestedForRouting(state, tt, tid)
+  if (!attested && amendment17Version(state.dials) >= 1 && liveRaidAfterSweep(state, tid, e.ts)) return RAID_RUNS_ON
+  if (attested) {
+    // Amendment 17 Part O item 3.2 (keeper's decision 32): a REPLACE aimed at an attested act is refused at
+    // the door, free, with its fix, rather than turned into a raid that can only strike and its successor
+    // dropped without a word. Read when the contest is filed; absent = converted as before.
+    if (mode === "REPLACE" && amendment17Version(state.dials) >= 1) return ATTESTED_REPLACE_REFUSED
     // An OFFICE may raid — with real coins, like anyone (live has always allowed it; the
     // 2026-08-15 "an organ holds no position" refusal was this reducer legislating, not
     // mirroring — retracted by the audit batch, 2026-08-16). Only the court KEY cannot: it has
@@ -145,6 +198,105 @@ export function validateContest(state: CoreState, e: Pick<EventEnvelope, "actor"
   return null
 }
 
+/** Amendment 17 Part P rider 2: the refusal of a REPLACE that changes only the examples or the trailer, the draft's text. */
+export const REPLACE_ONLY_CORRECTS = "REPLACE refused: the successor changes only the examples or the trailer — use CORRECT for one part (Law 30, Amendment 17)"
+
+/**
+ * Amendment 17 Part P rider 2 (core batch item 11): is this successor body the target definition's own text but for its
+ * examples clause or its trailer's fields? The target must carry a prose hash — kept only for a definition filed after
+ * activation (a filing, a repair, or a successor whose REPLACE was filed or rebased then) — and the successor's prose,
+ * the body before its clause's marker, read with each run of whitespace as one space and its ends trimmed (and what shows
+ * nothing — default-ignorable characters, a decomposed accent — read away: corrections.ts `folded`), must hash the
+ * same. The door compares form only; one changed visible letter of the prose makes the successor a REPLACE like any other.
+ * Linear: Part F's one-pass finder and one scan for Part A's marker.
+ */
+export function replaceOnlyCorrects(target: ActState, successorBody: string): boolean {
+  const prose = target.partHashes?.prose
+  if (!prose) return false
+  const parts = definitionPartsA17(successorBody)
+  return !!parts && partHash("prose", parts.prose) === prose
+}
+
+/** Amendment 17 Part O item 2.2: a correction refused, free, for a defect it names. */
+export const CORRECT_NAMES_NO_DEFECT = "a correction names no defect — the part it names is the allegation (Law 30; Amendment 17)"
+/** …and while another contest of any kind is live on its target. */
+export const CORRECT_WAITS = "another contest is live on this act — a correction is refused while it runs, one live contest per target (Law 30; Amendment 17)"
+/** …and when it restores a value an upheld correction replaced. */
+export const CORRECT_NO_REVERSION = "this value is one an upheld correction replaced — a correction may not restore it (Law 30; Amendment 17)"
+/** …and when its value is the one the part holds now: a correction names a new value (Part O items 2.1, 2.2). */
+export const CORRECT_NO_CHANGE = "this value is the one the part holds now — a correction names a new value (Law 30; Amendment 17)"
+/** …and on a definition filed before activation. */
+export const CORRECT_OLD_DEFINITION = "a definition filed before Amendment 17's activation is replaced whole, not corrected: a definition's parts are corrected only on one filed after it (Law 30; Part O item 2.8)"
+
+const correctionOf = (p: Record<string, unknown>): { part: unknown; value: unknown } => {
+  const c = p.correction
+  return c && typeof c === "object" && !Array.isArray(c) ? { part: (c as Record<string, unknown>).part, value: (c as Record<string, unknown>).value } : { part: undefined, value: undefined }
+}
+
+/**
+ * Amendment 17 Part O item 2.2 and core batch item 6 — the door of a correction, CONTEST_FILED `{ targetType, targetId,
+ * mode: "CORRECT", correction: { part, value }, reasoning }`. One part of one standing record; the value through the
+ * door of a filing of that part; an entry's scope or referent on any standing entry (seq 0 among them, decision 42), a
+ * definition's parts only on its head version, filed after activation; no defect (exempt from CONTEST_DEFECT_REQUIRED,
+ * refused when one is named); no reversion to a value an upheld correction replaced, nor the value the part holds now; no other contest of any kind live
+ * on the target; a balance of 2 coins (the challenge stake, burned at filing). Never routed to a raid: a correction
+ * takes the challenge screen whatever the target's attestations (Laws 22, 24, 31). Every refusal is free.
+ */
+function validateCorrection(state: CoreState, e: Pick<EventEnvelope, "actor" | "payload" | "ts">, exempt: boolean): string | null {
+  const p = e.payload
+  if (p.defect !== undefined) return CORRECT_NAMES_NO_DEFECT
+  const tt = str(p, "targetType")!
+  const tid = str(p, "targetId")!
+  const { part, value } = correctionOf(p)
+  const valueError = correctionValueError(part, value)
+  if (valueError) return valueError
+  const act = state.acts[tid]
+  if (!act || act.kind !== tt) return "target not found"
+  if (!correctionPartsFor(tt).includes(part as CorrectionPart)) {
+    return `a correction reaches an ENTRY's scope or referent, or a DEFINITION's formal, substrate, horizon, explicit or examples — not ${String(part)} of ${/^[AEIOU]/.test(tt) ? "an" : "a"} ${tt} (Law 30; Amendment 17)`
+  }
+  if (act.kind === "LABEL" && act.canonical) return "the canonical name rides with its ENTRY — contest the entry; only separately filed labels are independent contest targets"
+  if (act.status !== "ACCEPTED") return "only the CONFIRMED record is contested — judge a provisional act instead (Law 18)"
+  if (act.kind === "DEFINITION") {
+    const head = acceptedDefinitionHead(state, act.entryId!)
+    if (head && head.id !== tid) return `correct the head version of this entry's definition, ${head.id} — a correction reaches only the head (Law 30; Amendment 17)`
+    if (!act.partHashes?.prose) return CORRECT_OLD_DEFINITION
+  }
+  const cid = str(p, "contestId")
+  if (cid && (state.challenges[cid] || state.raids[cid])) return "contestId already used"
+  if (liveChallengeFor(state, tid) || liveRaidAfterSweep(state, tid, e.ts)) return CORRECT_WAITS
+  const valueHash = partHash(part as CorrectionPart, value as string)
+  if (restoresReplacedValue(act, part as CorrectionPart, valueHash)) return CORRECT_NO_REVERSION
+  // Part O item 2.2 "the new value": a correction to the value the part already holds changes nothing and is refused,
+  // free, rather than refunded and awarded for nothing. Read by the same hashes as the reversion check, so with the
+  // same limit: the scope of an entry filed before activation is known only inside its contentHash, and is not caught.
+  if (standingPartHash(act, part as CorrectionPart) === valueHash) return CORRECT_NO_CHANGE
+  if (!exempt && state.actors[e.actor].balanceBase < dialBig(state.dials, "CHALLENGE_STAKE_BASE")) {
+    return "a correction burns the challenge stake at filing, 2 coins (Law 14) — insufficient coins"
+  }
+  return null
+}
+
+/** Amendment 17 Part O item 2.8: the value hashes a REPLACE successor keeps when it is seated, computed when its
+ *  body passes the door under the amendment (the contest's filing, or its rebase). Before it: nothing. */
+function successorPartHashesOf(state: CoreState, targetType: string, spec: Record<string, unknown>): Pick<Challenge, "successorPartHashes"> {
+  if (amendment17Version(state.dials) < 1) return {}
+  if (targetType === "DEFINITION") {
+    const definition = definitionPartHashes(String(spec.body))
+    return definition ? { successorPartHashes: { definition } } : {}
+  }
+  if (targetType === "ENTRY" && !(typeof spec.existingEntryId === "string" && spec.existingEntryId.trim())) {
+    const definition = definitionPartHashes(String(spec.definitionBody))
+    return {
+      successorPartHashes: {
+        entry: entryPartHashes(String(spec.scopeJustification), successorReferentOf(spec)),
+        ...(definition ? { definition } : {}),
+      },
+    }
+  }
+  return {}
+}
+
 export function applyContest(state: CoreState, e: EventEnvelope, notes: string[]) {
   const p = e.payload
   const tt = str(p, "targetType")!
@@ -152,8 +304,9 @@ export function applyContest(state: CoreState, e: EventEnvelope, notes: string[]
   const key = targetKey(tt, tid)
   // a stale coalition on this target expires before routing — the join-sweep, deterministic
   expireStaleCoalitions(state, e.ts, notes, tid)
+  const correcting = str(p, "mode") === "CORRECT" // only ever admitted under Amendment 17 (validateCorrection)
 
-  if (hasLiveAttestation(state, key)) {
+  if (!correcting && attestedForRouting(state, tt, tid)) {
     const coins = BigInt(p.coinsBase as string)
     state.actors[e.actor].balanceBase -= coins
     fxCoinDebit(e.actor, coins, "RAID_STAKE", key)
@@ -165,6 +318,7 @@ export function applyContest(state: CoreState, e: EventEnvelope, notes: string[]
       raid = { id, targetType: tt, targetId: tid, status: "SCREEN", openedByFp: e.actor, frozenAttestBase: null, advancedTs: null }
       if (payoffRuleVersion(state.dials) >= 2) raid.openedTs = e.ts // Law 31e clock
       if (screenV2Active(state)) raid.v2 = { phase: "JURY", phaseTs: e.ts }
+      if (amendment17Version(state.dials) >= 1) raid.voidsWithTarget = true // Part P rider 1, read at the raid's opening
       state.raids[raid.id] = raid
       notes.push(`raid opened ${raid.id}`)
     } else {
@@ -181,13 +335,20 @@ export function applyContest(state: CoreState, e: EventEnvelope, notes: string[]
       state.supply.coinBurnedBase += burn // burned at filing, Law 14 — not escrowed
       state.burns[String(e.seq)] = { fp: e.actor, amountBase: burn, compensated: false } // mirrorable (A8)
     }
-    const mode = (str(p, "mode") ?? "STRIKE") as "STRIKE" | "REPLACE"
+    const mode = (str(p, "mode") ?? "STRIKE") as Challenge["mode"]
+    const correction = correcting ? correctionOf(p) as { part: CorrectionPart; value: string } : null
     const c: Challenge = {
       id: str(p, "contestId") ?? `challenge:${tt}:${tid}:${e.seq}`, targetType: tt, targetId: tid, mode,
       ...(mode === "REPLACE" ? { replacementSpec: p.replacementSpec as Record<string, unknown> } : {}),
+      ...(mode === "REPLACE" ? successorReferentStamp(state, tt, p.replacementSpec as Record<string, unknown>) : {}),
+      ...(mode === "REPLACE" ? successorPartHashesOf(state, tt, p.replacementSpec as Record<string, unknown>) : {}),
+      ...(correction ? { correction: { part: correction.part, value: correction.value, valueHash: partHash(correction.part, correction.value) } } : {}),
       authorFp: e.actor, status: "PENDING", filedSeq: e.seq,
       ...(dialBool(state.dials, CHALLENGE_REBASE_ACTIVE) && tt === "DEFINITION" ? { basisHeadId: tid } : {}),
       ...(payoffRuleVersion(state.dials) >= 2 ? { filedTs: e.ts } : {}), // Law 31e clock
+      // Part O item 4: a correction touches no attestation, so it stamps no author's refund
+      ...(amendment17Version(state.dials) >= 1 && !correcting ? { authorAttestRefund: true as const } : {}),
+      ...(amendment17Version(state.dials) >= 1 ? { voidsWithTarget: true as const } : {}), // Part P rider 1
     }
     if (screenV2Active(state)) c.v2 = { phase: "JURY", phaseTs: e.ts } // the draw waits for the clock
     state.challenges[c.id] = c
@@ -314,9 +475,18 @@ export function executeChallengeRuling(state: CoreState, c: Challenge, verdict: 
       return false
     }
   }
+  if (verdict === "ACCEPTED" && c.mode === "CORRECT") {
+    const blocked = correctionFeasible(state, c)
+    if (blocked) {
+      notes.push(`correction cannot be applied — ${blocked}; the contest waits for the court`)
+      return false
+    }
+  }
   c.status = verdict
   fxStatus("screen-status", c.id, "CHALLENGE", verdict)
-  if (verdict === "ACCEPTED") {
+  if (verdict === "ACCEPTED" && c.mode === "CORRECT") {
+    applyUpheldCorrection(state, c, atSeq, notes)
+  } else if (verdict === "ACCEPTED") {
     // The court key holds no actor row and takes no award for a contest it filed itself
     // (dormant law — office contests carry the office's own fp and are paid like live pays
     // them). Any other unknown author still crashes the fold loudly.
@@ -347,6 +517,15 @@ export function executeChallengeRuling(state: CoreState, c: Challenge, verdict: 
     } else {
       strikeConfirmed(state, state.acts[c.targetId], atSeq, `${rule}.challenge`, notes)
     }
+    // Amendment 17 Part O item 4.2: on a contest filed under the amendment, an upheld STRIKE or REPLACE refunds
+    // the target author's own open attestations of it — they shield nothing, so they forfeit nothing. Only the
+    // author's; a dismissed challenge refunds nothing; edge royalties already paid are untouched. On both paths
+    // that reach here: the screen's verdict and the court's COURT_RULING.
+    if (c.authorAttestRefund && (c.mode === "STRIKE" || c.mode === "REPLACE")) {
+      const author = state.acts[c.targetId]?.authorFp
+      const refunded = author ? refundOpenStakes(state, targetKey(c.targetType, c.targetId), "ATTEST", { fp: author, reason: AUTHOR_ATTEST_REFUND }) : 0n
+      if (refunded > 0n) notes.push(`challenge ${c.id}: the author's own attestations refunded, ${refunded} base (Amendment 17, Part O item 4)`)
+    }
     // The act fell, so a market that attested it AFTER the challenge was filed closes as
     // forfeit — nothing pays out (no RAID side), the coins stay escrowed. In prod this was
     // the 2026-08-10 stranded-market fix; here it is one line that cannot be forgotten.
@@ -355,6 +534,60 @@ export function executeChallengeRuling(state: CoreState, c: Challenge, verdict: 
   settleMarketVotes(state, targetKey("CHALLENGE", c.id), verdict, softHardF(state))
   notes.push(`challenge ${c.id} ${verdict === "ACCEPTED" ? "UPHELD" : "DISMISSED"}`)
   return true
+}
+
+/** Can an upheld correction be applied now? Its target still standing and, for a definition, still the head. Read at
+ *  the ruling (the screen's or the court's), as replaceFeasible reads a successor's. */
+export function correctionFeasible(state: CoreState, c: Challenge): string | null {
+  const act = state.acts[c.targetId]
+  if (!act || act.status !== "ACCEPTED") return "its target no longer stands"
+  if (act.kind === "DEFINITION") {
+    const head = acceptedDefinitionHead(state, act.entryId!)
+    if (!head || head.id !== act.id) return `its definition is no longer the head (${head?.id ?? "none"})`
+  }
+  return null
+}
+
+/**
+ * Amendment 17 Part O items 2.5 and 2.6 — an upheld correction. The act keeps its id, author, version, attestations,
+ * holdback, text and contentHash, and carries the correction as its own fact: the part, the new value's hash and the
+ * hash of the value it replaced; a referent correction sets the act's referent. The corrector's 2-coin burn is refunded
+ * (CORRECT_UPHELD_REFUND, mirroring the burn, which is then compensated) and the correction pays CORRECT_AWARD_BASE
+ * coins and CORRECT_AWARD_REP_MILLI reputation (CORRECT_UPHELD) — unless it corrected the corrector's own act, which has
+ * the 2 coins back and no award (Law 14), or the court key filed it, which holds no row. Nothing is clawed back and no
+ * coin stake on the target is settled: the attestations stand. The screen's judges settle soft, as on any challenge.
+ */
+function applyUpheldCorrection(state: CoreState, c: Challenge, atSeq: number, notes: string[]) {
+  const act = state.acts[c.targetId]
+  const { part, value, valueHash } = c.correction!
+  const replacedHash = standingPartHash(act, part)
+  act.corrections = [...(act.corrections ?? []), { challengeId: c.id, part, valueHash, ...(replacedHash ? { replacedHash } : {}), atSeq }]
+  if (part === "referent") {
+    if (value === "THING") delete act.referent // absent = THING, Law 3b
+    else act.referent = value as "CONCEPT" | "WORD"
+  }
+  fxActSync(act.id, act.kind)
+  const burn = state.burns[String(c.filedSeq)]
+  if (burn && !burn.compensated) {
+    if (burn.fp !== c.authorFp) throw new Error(`correction ${c.id}: burn at seq ${c.filedSeq} belongs to ${burn.fp}, not its author ${c.authorFp}`)
+    state.actors[burn.fp].balanceBase += burn.amountBase
+    fxCoinCredit(burn.fp, burn.amountBase, CORRECT_UPHELD_REFUND, c.id)
+    state.supply.coinMintedBase += burn.amountBase // the refund mints exactly what the filing burned
+    burn.compensated = true
+  }
+  const own = act.authorFp === c.authorFp
+  const corrector = c.authorFp === state.keys.court || own ? null : state.actors[c.authorFp]
+  if (corrector) {
+    const rep = dialBig(state.dials, CORRECT_AWARD_REP_MILLI)
+    corrector.repMilli += rep
+    state.supply.repMintedMilli += rep
+    fxRep(c.authorFp)
+    const coins = dialBig(state.dials, CORRECT_AWARD_BASE)
+    corrector.balanceBase += coins
+    fxCoinCredit(c.authorFp, coins, CORRECT_UPHELD, c.id)
+    state.supply.coinMintedBase += coins
+  }
+  notes.push(`correction ${c.id}: ${act.kind} ${act.id} ${part} corrected — the act as filed, the correction its own fact (Amendment 17, Part O item 2)${own ? "; its own author's correction: the burn refunded, no award" : ""}`)
 }
 
 // ── stale definition challenge rebasing (prospective, activation-gated) ─────
@@ -380,11 +613,21 @@ export function validateContestRebase(state: CoreState, e: Pick<EventEnvelope, "
   if (head.id !== nextId) return `targetId must be the current accepted definition ${head.id}`
   const other = liveChallengeFor(state, nextId)
   if (other && other.id !== c.id) return `definition ${nextId} already has a live challenge`
-  const specErr = replaceSpecError("DEFINITION", p.replacementSpec)
+  const specErr = replaceSpecError("DEFINITION", p.replacementSpec, amendment17Version(state.dials) >= 1)
   if (specErr) return specErr
   if (amendment16Version(state.dials) >= 1) {
-    const doorErr = replaceSpecDoorError("DEFINITION", p.replacementSpec as Record<string, unknown>)
+    const doorErr = replaceSpecDoorError("DEFINITION", p.replacementSpec as Record<string, unknown>, amendment17Version(state.dials) >= 1)
     if (doorErr) return doorErr
+  }
+  // Amendment 17 Part O item 3.2 (Laws 24, 30): a rebase files a new successor on a new head, and "only a rebase
+  // after activation, which files a new successor, meets the door then in force" (Prospective effect). So a
+  // REPLACE rebased onto a head another player attests is refused, free, with the same fix, as at filing:
+  // otherwise the challenge screen would seat a successor over an attested act without the court. Read at the
+  // rebase's seq; the author's own attestation does not count (Part O item 4). Absent = admitted, as before.
+  if (amendment17Version(state.dials) >= 1 && attestedForRouting(state, "DEFINITION", nextId)) return ATTESTED_REPLACE_REFUSED
+  // Amendment 17 Part P rider 2: the rebased successor is compared with its new target, the door read at the rebase
+  if (amendment17Version(state.dials) >= 1 && replaceOnlyCorrects(state.acts[nextId], String((p.replacementSpec as Record<string, unknown>).body))) {
+    return REPLACE_ONLY_CORRECTS
   }
   return null
 }
@@ -396,6 +639,10 @@ export function applyContestRebase(state: CoreState, e: EventEnvelope, notes: st
   c.targetId = str(p, "targetId")!
   c.basisHeadId = c.targetId
   c.replacementSpec = p.replacementSpec as Record<string, unknown>
+  // Amendment 17 Part O item 2.8: a successor rebased under the amendment passed the door then, and is filed after it
+  const hashes = successorPartHashesOf(state, "DEFINITION", c.replacementSpec)
+  if (hashes.successorPartHashes) c.successorPartHashes = hashes.successorPartHashes
+  else delete c.successorPartHashes
   c.rebaseCount = (c.rebaseCount ?? 0) + 1
   c.humanResets = 0
   delete c.parked
@@ -413,8 +660,21 @@ export function applyContestRebase(state: CoreState, e: EventEnvelope, notes: st
 
 // ── Law 30 mode REPLACE — the succession ────────────────────────────────────
 
-/** Shape-validate a replacementSpec at filing, so a malformed swap can't be proposed. */
-export function replaceSpecError(targetType: string, spec: unknown): string | null {
+/**
+ * A drafted ENTRY successor's referent (Amendment 17 Part O item 5), read as the entry door reads a
+ * filing's (Law 3b, reducer ENTRY): a non-empty string, else absent; absent and THING are THING.
+ */
+export function successorReferentOf(spec: Record<string, unknown>): string | null {
+  return typeof spec.referent === "string" && spec.referent.length > 0 ? spec.referent : null
+}
+
+/**
+ * Shape-validate a replacementSpec at filing, so a malformed swap can't be proposed. With `amendment17`
+ * (in force when the contest is filed) a drafted ENTRY successor may declare its referent, THING,
+ * CONCEPT or WORD, through Law 3b's door (Part O item 5). Without it, as before, a `referent` key is not
+ * read: it is kept in the spec as filed and the successor is THING.
+ */
+export function replaceSpecError(targetType: string, spec: unknown, amendment17 = false): string | null {
   if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
     return "mode REPLACE requires a replacementSpec object describing the successor"
   }
@@ -424,6 +684,12 @@ export function replaceSpecError(targetType: string, spec: unknown): string | nu
     if (has("existingEntryId")) return null
     if (!has("canonicalName") || !has("scopeJustification") || !has("definitionBody")) {
       return "ENTRY replacementSpec needs existingEntryId, or a full draft: canonicalName, scopeJustification, definitionBody — a replacement must carve (Law 5)"
+    }
+    if (amendment17) {
+      const referent = successorReferentOf(s)
+      if (referent !== null && referent !== "THING" && referent !== "CONCEPT" && referent !== "WORD") {
+        return "ENTRY replacementSpec referent must be THING, CONCEPT, or WORD (Law 3b) — a drafted successor's referent passes a filing's door (Amendment 17)"
+      }
     }
     return null
   }
@@ -443,25 +709,39 @@ export function replaceSpecError(targetType: string, spec: unknown): string | nu
  * refused when the successor would be seated (replaceFeasible). Before the amendment a successor was
  * checked only for non-empty fields: "!!!" and 500-character names, and 20,000-character definitions
  * against the 8,000 limit, were seated (Fable 5.1 analysis, 3.3).
+ *
+ * `amendment17` is Amendment 17 in force at the contest's (or the rebase's) filing: a successor's
+ * definition body then ends with the four-field trailer, an epoch refused with its fix (Part G item 5),
+ * and carries the Law 6b examples clause before it, checked after the trailer. A successor naming an
+ * existing entry carries no body and so neither. A successor edge may not take a type Amendment 17
+ * retires (Part N item 5).
  */
-export function replaceSpecDoorError(targetType: string, s: Record<string, unknown>): string | null {
+export function replaceSpecDoorError(targetType: string, s: Record<string, unknown>, amendment17 = false): string | null {
   const fail = (why: string) => `REPLACE successor refused: ${why} — a successor passes the same door as any filing (Amendment 16, Part D)`
+  const bodyError = (body: string): string | null => {
+    if (amendment17) {
+      const why = trailerError(body, 4) ?? examplesError(body, 4)
+      return why ? fail(`${why} (Amendment 17)`) : null
+    }
+    const trailer = trailerError(body, 5)
+    return trailer ? fail(trailer) : null
+  }
   if (targetType === "ENTRY") {
     if (typeof s.existingEntryId === "string" && s.existingEntryId.trim()) return null
     const shape = nameShapeErrorV16(String(s.canonicalName)) // Part D runs only under Amendment 16, so Part E's shape
     if (shape) return fail(shape)
     const big = firstTooLong([["scopeJustification", s.scopeJustification, LIMITS.SCOPE], ["definitionBody", s.definitionBody, LIMITS.DEFINITION_BODY]])
     if (big) return fail(big)
-    const trailer = trailerError(String(s.definitionBody))
-    return trailer ? fail(trailer) : null
+    return bodyError(String(s.definitionBody))
   }
   if (targetType === "DEFINITION") {
     const big = firstTooLong([["body", s.body, LIMITS.DEFINITION_BODY]])
     if (big) return fail(big)
-    const trailer = trailerError(String(s.body))
-    return trailer ? fail(trailer) : null
+    return bodyError(String(s.body))
   }
   if (targetType === "EDGE") {
+    // Amendment 17 Part N item 5: a successor edge of a retired type is refused with its challenge
+    if (amendment17 && RETIRED_EDGE_TYPES.has(String(s.edgeType))) return fail(`${retiredEdgeTypeError(String(s.edgeType))} (Amendment 17)`)
     const big = firstTooLong([["note", s.note ?? "", LIMITS.EDGE_NOTE]])
     return big ? fail(big) : null
   }
@@ -512,6 +792,18 @@ export function replaceFeasible(state: CoreState, c: Challenge): string | null {
   return null
 }
 
+/** Amendment 17 Part O item 5: the referent a drafted ENTRY successor carries, stamped on its challenge when
+ * the contest is filed under the amendment (CONCEPT or WORD; THING and absent stamp nothing). Before it,
+ * nothing: a `referent` key in the spec is kept as filed and never read, and the successor is THING. */
+function successorReferentStamp(state: CoreState, targetType: string, spec: Record<string, unknown>): Pick<Challenge, "successorReferent"> {
+  if (targetType !== "ENTRY" || amendment17Version(state.dials) < 1) return {}
+  if (typeof spec.existingEntryId === "string" && spec.existingEntryId.trim()) return {} // a confirmed entry keeps its own
+  const referent = successorReferentOf(spec)
+  return referent === "CONCEPT" || referent === "WORD" ? { successorReferent: referent } : {}
+}
+
+const partHashesOf = (hashes: PartHashes | undefined): Pick<ActState, "partHashes"> => (hashes ? { partHashes: { ...hashes } } : {})
+
 /** Create the successor ACCEPTED through the ONE acceptance pipeline (award, quarter-mint,
  *  holdback, the eating) — authored by the challenger, ids derived from the challenge (D6). */
 function seatSuccessor(state: CoreState, c: Challenge, rule: string, atSeq: number, notes: string[]): string {
@@ -526,9 +818,16 @@ function seatSuccessor(state: CoreState, c: Challenge, rule: string, atSeq: numb
     if (existing) return existing // a confirmed entry takes the place — nothing to seat
     const entryId = `succ:${c.id}`
     const n = nameNorm(state)(spec.canonicalName as string)
-    seat({ id: entryId, kind: "ENTRY", authorFp: c.authorFp, status: "PROVISIONAL", filedSeq: atSeq, contentHash: `replace:${c.id}`, nameNorm: n })
+    seat({
+      id: entryId, kind: "ENTRY", authorFp: c.authorFp, status: "PROVISIONAL", filedSeq: atSeq, contentHash: `replace:${c.id}`, nameNorm: n,
+      ...(c.successorReferent ? { referent: c.successorReferent } : {}), // Law 3b; absent = THING, as every successor before Amendment 17
+      ...partHashesOf(c.successorPartHashes?.entry), // Amendment 17 Part O item 2.8: filed after activation
+    })
     claimName(state.names, n, entryId) // claim ALONGSIDE (plural, A+A) — the relic's hold outlives it, as live's labelHolders always did
-    seat({ id: `succdef:${c.id}`, kind: "DEFINITION", authorFp: c.authorFp, status: "PROVISIONAL", filedSeq: atSeq, contentHash: `replacedef:${c.id}`, entryId, version: 1 })
+    seat({
+      id: `succdef:${c.id}`, kind: "DEFINITION", authorFp: c.authorFp, status: "PROVISIONAL", filedSeq: atSeq, contentHash: `replacedef:${c.id}`, entryId, version: 1,
+      ...partHashesOf(c.successorPartHashes?.definition),
+    })
     return entryId
   }
   if (c.targetType === "DEFINITION") {
@@ -537,6 +836,7 @@ function seatSuccessor(state: CoreState, c: Challenge, rule: string, atSeq: numb
       id: `succ:${c.id}`, kind: "DEFINITION", authorFp: c.authorFp, status: "PROVISIONAL",
       filedSeq: atSeq, contentHash: `replace:${c.id}`, entryId: old.entryId,
       version: nextDefinitionVersion(state, old.entryId!),
+      ...partHashesOf(c.successorPartHashes?.definition),
     })
   }
   return seat({
@@ -568,6 +868,7 @@ function teardownReplacedEntry(state: CoreState, c: Challenge, old: ActState, su
         refundOpenStakes(state, targetKey("EDGE", dep.id), "BOTH")
         dep.status = "REJECTED"
         fxStatus("act-status", dep.id, dep.kind, "REJECTED")
+        voidContestsOn(state, dep, notes) // Amendment 17 Part P rider 1
         notes.push(`edge ${dep.id} removed (would collide after re-pointing)`)
       } else {
         dep.fromEntryId = from
@@ -584,6 +885,7 @@ function teardownReplacedEntry(state: CoreState, c: Challenge, old: ActState, su
       refundOpenStakes(state, targetKey("DEFINITION", dep.id), "BOTH")
       dep.status = "REJECTED"
       fxStatus("act-status", dep.id, dep.kind, "REJECTED")
+      voidContestsOn(state, dep, notes) // Amendment 17 Part P rider 1
       notes.push(`definition ${dep.id} ${dep.orphaned ? "orphaned" : "voided"}`)
       continue
     }
@@ -599,6 +901,7 @@ function teardownReplacedEntry(state: CoreState, c: Challenge, old: ActState, su
         dep.status = "REJECTED"
         fxStatus("act-status", dep.id, dep.kind, "REJECTED")
         freeName(state, dep)
+        voidContestsOn(state, dep, notes) // Amendment 17 Part P rider 1
         notes.push(`label ${dep.id} voided`)
       }
     }
