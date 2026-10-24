@@ -132,6 +132,24 @@ export function amendment17Version(dials: Record<string, unknown>): 0 | 1 {
   if (raw === 1) return 1
   throw new Error(`Amendment 17 v${String(raw)} is ratified but not implemented in this reducer — upgrade before folding`)
 }
+/**
+ * Amendment 18 — the contest and market hygiene batch (drafted 2026-10-23; the keeper's decisions 60–66 on the
+ * 2026-10-22 whole-system review). ABSENT means 0, the rules in force before it; the amendment's activation
+ * sets 1. Same discipline as AMENDMENT_17_VERSION: never add it to GENESIS_DIALS, and a version this reducer
+ * does not implement halts the fold. It rides on Amendment 17 (its stamps extend Part P rider 1's), so the
+ * dial policy refuses it without AMENDMENT_17_VERSION. MARKET_ROUND_CAP (decision 66) is its one new dial,
+ * optional: absent, a sealed market re-opens without limit, as Law 18a read before the amendment.
+ */
+export const AMENDMENT_18_VERSION = "AMENDMENT_18_VERSION"
+/** Amendment 18 decision 66 (Law 18a): the rounds a sealed market may run without ruling before it concludes
+ * without a verdict. Never in GENESIS_DIALS; read only under the amendment, and absent means no cap. */
+export const MARKET_ROUND_CAP = "MARKET_ROUND_CAP"
+export function amendment18Version(dials: Record<string, unknown>): 0 | 1 {
+  const raw = dials[AMENDMENT_18_VERSION]
+  if (raw === undefined) return 0
+  if (raw === 1) return 1
+  throw new Error(`Amendment 18 v${String(raw)} is ratified but not implemented in this reducer — upgrade before folding`)
+}
 /** A nonnegative integer dial that may be absent (then `absent`). */
 export const dialBigOr = (dials: Record<string, unknown>, key: string, absent: bigint): bigint =>
   dials[key] === undefined ? absent : dialBig(dials, key)
@@ -172,6 +190,8 @@ const POSITIVE_INTEGER_DIALS = new Set([
   "PAYOFF_RULE_VERSION", // Amendment 15 — absent means 1
   "AMENDMENT_16_VERSION", // Amendment 16 — absent means 0
   "AMENDMENT_17_VERSION", // Amendment 17 — absent means 0
+  "AMENDMENT_18_VERSION", // Amendment 18 — absent means 0
+  "MARKET_ROUND_CAP", // Amendment 18 decision 66 — absent means no cap
   "ATTESTATIONS_PER_DAY", // Amendment 16 Part A — per named attester per UTC day
   "FILING_CAP", "FILING_REGEN_MS", "INFLIGHT_CAP", "QUORUM_RULE_VERSION",
   "QUORUM_FLOOR", "QUORUM_CEILING", "JUDGE_WINDOW_MS", "EDGE_DECAY_K",
@@ -266,6 +286,9 @@ export function dialPolicyError(dials: Record<string, unknown>): string | null {
   if (dials[AMENDMENT_17_VERSION] !== undefined &&
       (dials[CORRECT_AWARD_BASE] === undefined || dials[CORRECT_AWARD_REP_MILLI] === undefined)) {
     return "Amendment 17 needs CORRECT_AWARD_BASE and CORRECT_AWARD_REP_MILLI (Part O item 2): what an upheld correction pays is part of the law it enacts, so no correction is ever paid from an absent dial"
+  }
+  if (dials[AMENDMENT_18_VERSION] !== undefined && dials[AMENDMENT_17_VERSION] === undefined) {
+    return "Amendment 18 needs Amendment 17: its contest stamps extend Part P rider 1's, and its screen rule reads Law 18a as Amendment 17 left it"
   }
   const floor = dials.QUORUM_FLOOR
   const ceiling = dials.QUORUM_CEILING

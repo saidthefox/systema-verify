@@ -120,17 +120,17 @@ export function settleOpenStakes(state: CoreState, key: string, outcome: "ACCEPT
   notes.push(`settled ${open.length} stakes`)
 }
 
-/** Refund open coin stakes (one side or both) — a void is no judgment on the market. `only` narrows the
- *  refund to one staker's stakes and names its reason (Amendment 17 Part O item 4: the author's own
- *  attestations, AUTHOR_ATTEST_REFUND). Returns the coins returned from escrow. */
-export function refundOpenStakes(state: CoreState, key: string, side: "ATTEST" | "RAID" | "BOTH", only?: { fp: string; reason: string }): bigint {
+/** Refund open coin stakes (one side or both) — a void is no judgment on the market. `only` names the refund's
+ *  reason (STAKE_REFUND when absent) and, with `fp`, narrows it to one staker's stakes (Amendment 17 Part O
+ *  item 4: the author's own attestations, AUTHOR_ATTEST_REFUND). Returns the coins returned from escrow. */
+export function refundOpenStakes(state: CoreState, key: string, side: "ATTEST" | "RAID" | "BOTH", only?: { fp?: string; reason: string }): bigint {
   const all = state.stakes[key]
   if (!all) return 0n
   let refunded = 0n
   for (const s of all) {
     if (s.status !== "OPEN") continue
     if (side !== "BOTH" && s.side !== side) continue
-    if (only && s.fp !== only.fp) continue
+    if (only?.fp && s.fp !== only.fp) continue
     s.status = "SETTLED"
     s.payoutBase = s.amountBase
     state.actors[s.fp].balanceBase += s.amountBase
@@ -192,6 +192,8 @@ function clawbackAward(state: CoreState, act: ActState, notes?: string[]) {
 
 /** Amendment 17 Part P rider 1: the mint reason of a voided contest's refunded burn (a coin-assay closed reason). */
 export const CONTEST_VOID_REFUND = "CONTEST_VOID_REFUND"
+/** Amendment 18 decision 64 (Law 24): the escrow-out reason of a failed raid's returned coins. */
+export const RAID_FAILED_REFUND = "RAID_FAILED_REFUND"
 
 /**
  * Amendment 17 Part P rider 1 (Law 30; keeper's decisions 47 and 49; core batch item 10): a contest filed under the
@@ -201,11 +203,18 @@ export const CONTEST_VOID_REFUND = "CONTEST_VOID_REFUND"
  * compensated, as Law 31e refunds a lapse); a raid's screen votes are refunded, its raiders' coins and the attesters'
  * already returned by the fall's own refund of the act's stakes (called after it). No award, no clawback. A contest
  * filed before activation carries no stamp and runs on as it was filed. Called with the act already fallen.
+ *
+ * Amendment 18 decision 60 (Law 30; keeper 2026-10-23): with `fall` named, the act fell by a path the rider did not
+ * reach — subsumed under Law 11e, or superseded by another ruling — and only a contest filed under THAT amendment
+ * (voidsOnAnyFall) concludes void; one filed under Amendment 17 alone runs on, as the rule it was filed under says,
+ * and the court's door and the screen refuse to uphold it (reducer COURT_RULING; validateScreenVote).
  */
-export function voidContestsOn(state: CoreState, act: ActState, notes: string[]) {
+export function voidContestsOn(state: CoreState, act: ActState, notes: string[], fall?: string) {
+  const stamped = (c: { voidsWithTarget?: true; voidsOnAnyFall?: true }) => (fall ? !!c.voidsOnAnyFall : !!c.voidsWithTarget)
+  const how = fall ? `${fall} (Law 30; Amendment 18)` : "fell with its entry (Law 30; Amendment 17)"
   for (const id of Object.keys(state.challenges).sort()) {
     const c = state.challenges[id]
-    if (c.targetId !== act.id || c.targetType !== act.kind || c.status !== "PENDING" || !c.voidsWithTarget) continue
+    if (c.targetId !== act.id || c.targetType !== act.kind || c.status !== "PENDING" || !stamped(c)) continue
     refundMarketVotes(state, targetKey("CHALLENGE", c.id))
     let refunded = false
     const burn = state.burns[String(c.filedSeq)]
@@ -219,16 +228,16 @@ export function voidContestsOn(state: CoreState, act: ActState, notes: string[])
     }
     c.status = "VOID"
     fxStatus("screen-status", c.id, "CHALLENGE", "VOID")
-    notes.push(`challenge ${c.id} VOID — its target ${act.kind} ${act.id} fell with its entry (Law 30; Amendment 17)${refunded ? ", filing stake refunded" : ""}; market refunded`)
+    notes.push(`challenge ${c.id} VOID — its target ${act.kind} ${act.id} ${how}${refunded ? ", filing stake refunded" : ""}; market refunded`)
   }
   for (const id of Object.keys(state.raids).sort()) {
     const r = state.raids[id]
-    if (r.targetId !== act.id || r.targetType !== act.kind || !RAID_LIVE.includes(r.status) || !r.voidsWithTarget) continue
+    if (r.targetId !== act.id || r.targetType !== act.kind || !RAID_LIVE.includes(r.status) || !stamped(r)) continue
     refundMarketVotes(state, targetKey("RAID", r.id))
     refundOpenStakes(state, targetKey(r.targetType, r.targetId), "RAID") // none left open after the fall's own refund
     r.status = "VOID"
     fxStatus("screen-status", r.id, "RAID", "VOID")
-    notes.push(`raid ${r.id} VOID — its target ${act.kind} ${act.id} fell with its entry (Law 30; Amendment 17); raiders and judges refunded`)
+    notes.push(`raid ${r.id} VOID — its target ${act.kind} ${act.id} ${how}; raiders and judges refunded`)
   }
 }
 
@@ -255,6 +264,45 @@ export function cascadeEntry(state: CoreState, entryId: string, notes: string[])
   }
 }
 
+/** Amendment 18 decision 66 (Law 18a): the escrow-out reason of the coins a market that ruled nothing returns. */
+export const NO_VERDICT_REFUND = "NO_VERDICT_REFUND"
+
+/**
+ * Amendment 18 decision 66 (Law 18a; keeper 2026-10-23): a sealed market that has ruled nothing after the recorded
+ * MARKET_ROUND_CAP rounds concludes without a verdict. Nobody was wrong, so it pays as a void does, not as a
+ * rejection: every judge's reputation returned untouched (no parimutuel), every coin stake refunded
+ * (NO_VERDICT_REFUND), no Law 25a debit, the name freed, the flags dropped without penalty; the act is REJECTED
+ * and marked `noVerdict`, and may be refiled as if never judged. The one filing's definition and a Law 39 collision
+ * edge follow the act, as they follow its verdict; an entry's dependents fall by Law 30's cascade. Called by the
+ * market's own round end, with the market already removed.
+ */
+export function concludeWithoutVerdict(state: CoreState, act: ActState, rounds: number, atSeq: number, notes: string[]) {
+  const follow = (dep: ActState, rule: string) => {
+    dep.status = "REJECTED"
+    dep.ruling = { status: "REJECTED", atSeq, rule }
+    dep.noVerdict = true
+    fxStatus("act-status", dep.id, dep.kind, "REJECTED")
+    delete state.flags[dep.id]
+    freeName(state, dep)
+    refundMarketVotes(state, targetKey(dep.kind, dep.id))
+    refundOpenStakes(state, targetKey(dep.kind, dep.id), "BOTH", { reason: NO_VERDICT_REFUND })
+  }
+  const rule = "quorum.v1.sealed.no-verdict"
+  follow(act, rule)
+  const collision = act.collisionWithEntryId ? state.acts[`collision:${act.id}`] : undefined
+  if (collision?.collisionParentId === act.id && collision.status === "PROVISIONAL") {
+    follow(collision, `${rule}.collision`)
+    notes.push(`collision edge ${collision.id} followed ${act.kind} ${act.id} — no verdict (Law 39)`)
+  }
+  const carried = act.kind === "ENTRY" && act.filingDefinitionId ? state.acts[act.filingDefinitionId] : undefined
+  if (carried?.filingParentId === act.id && carried.status === "PROVISIONAL") {
+    follow(carried, `${rule}.filing`)
+    notes.push(`DEFINITION ${carried.id} followed its filing, ENTRY ${act.id} — no verdict (Law 5; Amendment 17)`)
+  }
+  if (act.kind === "ENTRY") cascadeEntry(state, act.id, notes)
+  notes.push(`${act.kind} ${act.id} concluded without a verdict after ${rounds} rounds (Law 18a; Amendment 18) — every stake returned, no debit, free to refile`)
+}
+
 /** Strike a CONFIRMED act (upheld STRIKE challenge, court-ruled raid): flip off ACCEPTED with
  *  exact clawback, free its name, cascade if it is an entry. Coin-market settlement is the
  *  CALLER's move — who wins the pool depends on which door struck it. */
@@ -277,6 +325,7 @@ export function supersedeReplaced(state: CoreState, act: ActState, succId: strin
   act.ruling = { status: "REJECTED", atSeq, rule } // how it resolved; the status says how it fell
   act.supersededBy = succId
   const clawed = clawbackAward(state, act, notes)
+  voidContestsOn(state, act, notes, "was superseded") // Amendment 18 decision 60: only contests filed under the amendment
   notes.push(`superseded ${act.kind} ${act.id} → ${succId} (clawback ${clawed} milli)`)
 }
 
@@ -487,6 +536,7 @@ export function subsumeLeaps(state: CoreState, notes: string[]) {
     // changes what the projector HEARS, never what the fold DECIDES.
     fxStatus("act-status", e.id, e.kind, "REJECTED")
     dropEdge(adj, e.fromEntryId!, e.id) // struck: no longer a rung for the candidates after it
+    voidContestsOn(state, e, notes, "was subsumed (Law 11e)") // Amendment 18 decision 60: only contests filed under the amendment
     notes.push(`subsumed EDGE ${e.id} via ${via} (Law 11e)`)
   }
 }

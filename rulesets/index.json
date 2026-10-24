@@ -239,6 +239,15 @@
       ]
     },
     {
+      "rulesetHash": "db8c6f501402fbb3ae14a63f9632331a3b2cf9021516a5452cd980541cfd57b2",
+      "path": "rulesets/db8c6f501402fbb3ae14a63f9632331a3b2cf9021516a5452cd980541cfd57b2",
+      "status": "candidate",
+      "protocols": [
+        1,
+        2
+      ]
+    },
+    {
       "rulesetHash": "ee7e5c4efce9f9fa4e70ac5bba5e6ecda9e26a75b5d8a71598b42bd985b861cb",
       "path": "rulesets/ee7e5c4efce9f9fa4e70ac5bba5e6ecda9e26a75b5d8a71598b42bd985b861cb",
       "status": "candidate",

@@ -37,6 +37,7 @@ const noNegativeBalances: Check = s => {
 const noOpenMarketOnRuledActs: Check = s => {
   for (const id of Object.keys(s.acts)) {
     const a = s.acts[id]
+    if (a.noVerdict && a.status !== "REJECTED") return `act ${id} is marked noVerdict but is ${a.status}` // Amendment 18 decision 66
     if (a.status === "PROVISIONAL") continue
     const key = targetKey(a.kind, a.id)
     if (s.votes[key] && Object.keys(s.votes[key]).length) return `open votes on ruled act ${id}`
@@ -50,6 +51,8 @@ const noOpenMarketOnRuledActs: Check = s => {
     const a = s.acts[id]
     if (!a || targetKey(a.kind, a.id) !== key) return `sealed market ${key} names no act`
     if (a.status !== "PROVISIONAL") return `sealed round open on ruled act ${id}`
+    // Amendment 18 decision 61: the fresh-reveal stamp belongs to a round after the first
+    if (s.sealed![key].freshReveal && s.sealed![key].round < 2) return `sealed market ${key} is stamped freshReveal in round ${s.sealed![key].round}`
   }
   // screens settle when they resolve: a decided challenge or a raid past SCREEN keeps no market
   for (const id of Object.keys(s.challenges)) {
@@ -84,6 +87,19 @@ const contestLifecycle: Check = s => {
   for (const id of Object.keys(s.challenges)) {
     const c = s.challenges[id]
     if ((c.mode === "CORRECT") !== !!c.correction) return `challenge ${id} is mode ${c.mode} ${c.correction ? "with" : "without"} a correction`
+  }
+  // Amendment 18 decision 60: a contest stamped for the amendment carries Part P rider 1's stamp too, and while it is
+  // live its target stands — every fall voids it in the same fact
+  for (const id of Object.keys(s.challenges)) {
+    const c = s.challenges[id]
+    if (!c.voidsOnAnyFall) continue
+    if (!c.voidsWithTarget) return `challenge ${id} is stamped voidsOnAnyFall without voidsWithTarget`
+    if (c.status === "PENDING" && s.acts[c.targetId]?.status !== "ACCEPTED") return `challenge ${id} is live on a fallen target ${c.targetId} (Amendment 18)`
+  }
+  for (const id of Object.keys(s.raids)) {
+    const r = s.raids[id]
+    if (r.voidsOnAnyFall && !r.voidsWithTarget) return `raid ${id} is stamped voidsOnAnyFall without voidsWithTarget`
+    if (r.voidsOnAnyFall && RAID_LIVE.includes(r.status) && s.acts[r.targetId]?.status !== "ACCEPTED") return `raid ${id} is live on a fallen target ${r.targetId} (Amendment 18)`
   }
   // a finished raid leaves no RAID coins open on its target (unless a NEW raid reopened it)
   for (const id of Object.keys(s.raids)) {

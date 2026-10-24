@@ -1,0 +1,542 @@
+import type { ActState, CoreState } from "./types"
+import { RAID_LIVE, isDead, targetKey, claimName, releaseName } from "./types"
+import { amendment16Version, dialBig, dialBigOr, dialBool, payoffRuleVersion } from "./dials"
+import { acceptanceRepMilli, coinRewardBase, settleStakes, settleVotes } from "./math"
+import { dropEdge, instanceAdjacency, ladderVia } from "./graph"
+
+/**
+ * Shared ruling effects — THE one implementation each consequence has, used by the act
+ * ruling path, the contest ladder, coherence voids and REPLACE seating alike. In prod these
+ * existed as three near-copies that drifted (the 2026-08-07/08-10 case law); here a second
+ * implementation cannot exist because there is nowhere to put one.
+ */
+
+/** Losing-side forfeit fraction: A7 soft (the act merely stood/fell unraided) or hard. */
+export const softHardF = (state: CoreState): bigint =>
+  dialBool(state.dials, "A7_ACTIVE") ? dialBig(state.dials, "SOFT_FORFEIT_PERMILLE") : 1000n
+
+/** The effects trace (DECOSTUME Phase 3, 2026-08-16): settlement DETAILS the projector must
+ *  transcribe into rows — per-vote payouts, per-stake settlements — recorded as the reducer
+ *  applies them. NOT part of state identity (never hashed, never validated); reset per event
+ *  by applyEvent. The reducer decides; the projector transcribes; nothing recomputes.  */
+export type Fx =
+  | { t: "vote"; targetType: string; targetId: string; fp: string; payoutMilli: bigint; stakeMilli: bigint }
+  | { t: "vote-void"; targetType: string; targetId: string; fp: string }
+  | { t: "stake"; targetType: string; targetId: string; fp: string; side: string; amountBase: bigint; payoutBase: bigint; placedSeq: number }
+  | { t: "act-status"; id: string; kind: string; status: string }
+  | { t: "act-sync"; id: string; kind: string }
+  | { t: "screen-status"; id: string; kind: string; status: string }
+  | { t: "holdback"; id: string; kind: string; status: string }
+  | { t: "rep"; fp: string }
+  | { t: "coin-credit"; fp: string; amountBase: bigint; reason: string; ref?: string }
+  | { t: "coin-debit"; fp: string; amountBase: bigint; reason: string; ref?: string }
+let FX: Fx[] | null = null
+export function beginFx() { FX = [] }
+export function takeFx(): Fx[] { const out = FX ?? []; FX = null; return out }
+const fx = (e: Fx) => { if (FX) FX.push(e) }
+/** Status-change fx, callable from the ladder too. */
+export const fxStatus = (t: "act-status" | "screen-status" | "holdback", id: string, kind: string, status: string) => {
+  if (t === "act-status") fx({ t, id, kind, status })
+  else if (t === "screen-status") fx({ t, id, kind, status })
+  else fx({ t, id, kind, status })
+}
+/** An act's non-status shape changed (REPLACE re-points edges and transfers labels). */
+export const fxActSync = (id: string, kind: string) => fx({ t: "act-sync", id, kind })
+/** Mark an actor's reputation as touched — the door syncs the row from folded state. */
+export const fxRep = (fp: string) => fx({ t: "rep", fp })
+/** Every actor-balance mutation announces its exact economic effect. Coin lots are a pure
+ *  projection over this trace; these helpers therefore reject ambiguous signs and skip zero. */
+export const fxCoinCredit = (fp: string, amountBase: bigint, reason: string, ref?: string) => {
+  if (amountBase < 0n) throw new Error(`negative coin credit (${reason})`)
+  if (amountBase > 0n) fx({ t: "coin-credit", fp, amountBase, reason, ...(ref ? { ref } : {}) })
+}
+export const fxCoinDebit = (fp: string, amountBase: bigint, reason: string, ref?: string) => {
+  if (amountBase < 0n) throw new Error(`negative coin debit (${reason})`)
+  if (amountBase > 0n) fx({ t: "coin-debit", fp, amountBase, reason, ...(ref ? { ref } : {}) })
+}
+
+/** targetType never contains a colon; targetId is deliberately opaque and may contain many. */
+const targetFromKey = (key: string) => {
+  const colon = key.indexOf(":")
+  if (colon < 1) throw new Error(`invalid target key ${key}`)
+  return { targetType: key.slice(0, colon), targetId: key.slice(colon + 1) }
+}
+
+/** Settle a vote market at its outcome and close it. Deterministic order; supply-exact. */
+export function settleMarketVotes(state: CoreState, key: string, outcome: "ACCEPTED" | "REJECTED", fPermille: bigint) {
+  const market = state.votes[key]
+  if (!market || !Object.keys(market).length) return
+  const settlement = settleVotes(market, outcome, fPermille, dialBig(state.dials, "CONCURRENCE_BONUS_MILLI"))
+  for (const fp of Object.keys(settlement.deltasMilli).sort()) {
+    const judge = state.actors[fp]
+    judge.repMilli += settlement.deltasMilli[fp]
+    judge.openStakeMilli -= market[fp].stakeMilli
+    fx({ t: "vote", ...targetFromKey(key), fp, payoutMilli: settlement.deltasMilli[fp], stakeMilli: market[fp].stakeMilli })
+    fxRep(fp)
+  }
+  state.supply.repMintedMilli += settlement.mintedMilli
+  state.supply.repBurnedMilli += settlement.burnedMilli
+  delete state.votes[key]
+}
+
+/** Amendment 16 Part B: an act ruled or voided by any path other than the end of a sealed round
+ *  releases its open commitments in full — no forfeit, the judges were not late. */
+export function releaseSealedMarket(state: CoreState, key: string) {
+  const sealed = state.sealed?.[key]
+  if (!sealed) return
+  for (const fp of Object.keys(sealed.commits)) state.actors[fp].openStakeMilli -= sealed.commits[fp].stakeMilli
+  delete state.sealed![key]
+}
+
+/** Void a vote market — every stake freed, no deltas, no penalty (Law 31 resets, Law 30 voids). */
+export function refundMarketVotes(state: CoreState, key: string) {
+  releaseSealedMarket(state, key)
+  const market = state.votes[key]
+  if (!market) return
+  for (const fp of Object.keys(market)) {
+    state.actors[fp].openStakeMilli -= market[fp].stakeMilli
+    fx({ t: "vote-void", ...targetFromKey(key), fp })
+  }
+  delete state.votes[key]
+}
+
+/** Parimutuel-settle the open coin stakes on a target. Floor dust stays in the escrow pool. */
+export function settleOpenStakes(state: CoreState, key: string, outcome: "ACCEPTED" | "REJECTED", notes: string[]) {
+  const all = state.stakes[key]
+  if (!all) return
+  const open = all.filter(s => s.status === "OPEN")
+  if (!open.length) return
+  const { payouts, paidBase } = settleStakes(open, outcome)
+  open.forEach((s, i) => {
+    s.status = "SETTLED"
+    s.payoutBase = payouts[i]
+    if (payouts[i] > 0n) {
+      state.actors[s.fp].balanceBase += payouts[i]
+      fxCoinCredit(s.fp, payouts[i], "STAKE_SETTLEMENT", key)
+    }
+    fx({ t: "stake", ...targetFromKey(key), fp: s.fp, side: s.side, amountBase: s.amountBase, payoutBase: payouts[i], placedSeq: s.placedSeq })
+  })
+  state.supply.escrowPoolBase -= paidBase
+  notes.push(`settled ${open.length} stakes`)
+}
+
+/** Refund open coin stakes (one side or both) — a void is no judgment on the market. `only` names the refund's
+ *  reason (STAKE_REFUND when absent) and, with `fp`, narrows it to one staker's stakes (Amendment 17 Part O
+ *  item 4: the author's own attestations, AUTHOR_ATTEST_REFUND). Returns the coins returned from escrow. */
+export function refundOpenStakes(state: CoreState, key: string, side: "ATTEST" | "RAID" | "BOTH", only?: { fp?: string; reason: string }): bigint {
+  const all = state.stakes[key]
+  if (!all) return 0n
+  let refunded = 0n
+  for (const s of all) {
+    if (s.status !== "OPEN") continue
+    if (side !== "BOTH" && s.side !== side) continue
+    if (only?.fp && s.fp !== only.fp) continue
+    s.status = "SETTLED"
+    s.payoutBase = s.amountBase
+    state.actors[s.fp].balanceBase += s.amountBase
+    fxCoinCredit(s.fp, s.amountBase, only?.reason ?? "STAKE_REFUND", key)
+    state.supply.escrowPoolBase -= s.amountBase
+    refunded += s.amountBase
+    fx({ t: "stake", ...targetFromKey(key), fp: s.fp, side: s.side, amountBase: s.amountBase, payoutBase: s.amountBase, placedSeq: s.placedSeq })
+  }
+  return refunded
+}
+
+export function freeName(state: CoreState, act: ActState) {
+  if (act.nameNorm) releaseName(state.names, act.nameNorm, act.id) // plural since A+A (2026-08-16)
+}
+
+/**
+ * Amendment 16 Part F (Law 22, the keeper's meaning, 2026-10-06): once someone other than its author has
+ * attested an act, the attester holds it. The author is immune from later clawback, and the reputation
+ * Law 25 would have taken from the author is taken from the act's non-author attesters instead, in
+ * proportion to the coins each attested (all their attestations on it, whatever their status). The
+ * shares are floored and the remainder goes, one milli at a time, to the largest positions first
+ * (ties by fingerprint), so the total is exact. Reputation has no floor (Law 25). Returns null when no
+ * one other than the author attested: the author then holds the act themselves, as before.
+ */
+function attesterShares(state: CoreState, act: ActState, clawed: bigint): Array<[string, bigint]> | null {
+  const byFp = new Map<string, bigint>()
+  for (const s of state.stakes[targetKey(act.kind, act.id)] ?? []) {
+    if (s.side !== "ATTEST" || s.fp === act.authorFp || s.amountBase <= 0n) continue
+    byFp.set(s.fp, (byFp.get(s.fp) ?? 0n) + s.amountBase)
+  }
+  if (!byFp.size) return null
+  const total = [...byFp.values()].reduce((a, b) => a + b, 0n)
+  const order = [...byFp.entries()].sort((a, b) => (b[1] > a[1] ? 1 : b[1] < a[1] ? -1 : a[0] < b[0] ? -1 : 1))
+  const shares = order.map(([fp, coins]) => [fp, (clawed * coins) / total] as [string, bigint])
+  let rest = clawed - shares.reduce((a, [, v]) => a + v, 0n)
+  for (let i = 0; rest > 0n; i = (i + 1) % shares.length, rest -= 1n) shares[i][1] += 1n
+  return shares
+}
+
+/** Undo EXACTLY the reputation an acceptance awarded (recorded at award time — no recompute drift). */
+function clawbackAward(state: CoreState, act: ActState, notes?: string[]) {
+  const clawed = act.awardedRepMilli ?? 0n
+  if (clawed > 0n) {
+    const shares = amendment16Version(state.dials) >= 1 ? attesterShares(state, act, clawed) : null
+    if (shares) {
+      for (const [fp, share] of shares) {
+        state.actors[fp].repMilli -= share
+        fxRep(fp)
+      }
+      notes?.push(`${act.kind} ${act.id}: its attesters hold it — ${clawed} milli clawed from ${shares.map(([fp, v]) => `${fp} ${v}`).join(", ")}; the author is immune (Amendment 16, Part F)`)
+    } else {
+      state.actors[act.authorFp].repMilli -= clawed
+      fxRep(act.authorFp)
+    }
+    state.supply.repBurnedMilli += clawed
+  }
+  return clawed
+}
+
+/** Amendment 17 Part P rider 1: the mint reason of a voided contest's refunded burn (a coin-assay closed reason). */
+export const CONTEST_VOID_REFUND = "CONTEST_VOID_REFUND"
+/** Amendment 18 decision 64 (Law 24): the escrow-out reason of a failed raid's returned coins. */
+export const RAID_FAILED_REFUND = "RAID_FAILED_REFUND"
+
+/**
+ * Amendment 17 Part P rider 1 (Law 30; keeper's decisions 47 and 49; core batch item 10): a contest filed under the
+ * amendment and live on an act that falls with its entry — orphaned or voided by Law 30's cascade, or orphaned, voided
+ * or removed by a replaced entry's teardown — concludes VOID in the same ruling. A challenge's or a correction's
+ * screen votes are refunded and its burned 2 coins refunded by compensation (CONTEST_VOID_REFUND, the burn then
+ * compensated, as Law 31e refunds a lapse); a raid's screen votes are refunded, its raiders' coins and the attesters'
+ * already returned by the fall's own refund of the act's stakes (called after it). No award, no clawback. A contest
+ * filed before activation carries no stamp and runs on as it was filed. Called with the act already fallen.
+ *
+ * Amendment 18 decision 60 (Law 30; keeper 2026-10-23): with `fall` named, the act fell by a path the rider did not
+ * reach — subsumed under Law 11e, or superseded by another ruling — and only a contest filed under THAT amendment
+ * (voidsOnAnyFall) concludes void; one filed under Amendment 17 alone runs on, as the rule it was filed under says,
+ * and the court's door and the screen refuse to uphold it (reducer COURT_RULING; validateScreenVote).
+ */
+export function voidContestsOn(state: CoreState, act: ActState, notes: string[], fall?: string) {
+  const stamped = (c: { voidsWithTarget?: true; voidsOnAnyFall?: true }) => (fall ? !!c.voidsOnAnyFall : !!c.voidsWithTarget)
+  const how = fall ? `${fall} (Law 30; Amendment 18)` : "fell with its entry (Law 30; Amendment 17)"
+  for (const id of Object.keys(state.challenges).sort()) {
+    const c = state.challenges[id]
+    if (c.targetId !== act.id || c.targetType !== act.kind || c.status !== "PENDING" || !stamped(c)) continue
+    refundMarketVotes(state, targetKey("CHALLENGE", c.id))
+    let refunded = false
+    const burn = state.burns[String(c.filedSeq)]
+    if (burn && !burn.compensated) {
+      if (burn.fp !== c.authorFp) throw new Error(`challenge ${c.id}: burn at seq ${c.filedSeq} belongs to ${burn.fp}, not its author ${c.authorFp}`)
+      state.actors[burn.fp].balanceBase += burn.amountBase
+      fxCoinCredit(burn.fp, burn.amountBase, CONTEST_VOID_REFUND, c.id)
+      state.supply.coinMintedBase += burn.amountBase // the refund mints exactly what the filing burned
+      burn.compensated = true
+      refunded = true
+    }
+    c.status = "VOID"
+    fxStatus("screen-status", c.id, "CHALLENGE", "VOID")
+    notes.push(`challenge ${c.id} VOID — its target ${act.kind} ${act.id} ${how}${refunded ? ", filing stake refunded" : ""}; market refunded`)
+  }
+  for (const id of Object.keys(state.raids).sort()) {
+    const r = state.raids[id]
+    if (r.targetId !== act.id || r.targetType !== act.kind || !RAID_LIVE.includes(r.status) || !stamped(r)) continue
+    refundMarketVotes(state, targetKey("RAID", r.id))
+    refundOpenStakes(state, targetKey(r.targetType, r.targetId), "RAID") // none left open after the fall's own refund
+    r.status = "VOID"
+    fxStatus("screen-status", r.id, "RAID", "VOID")
+    notes.push(`raid ${r.id} VOID — its target ${act.kind} ${act.id} ${how}; raiders and judges refunded`)
+  }
+}
+
+/** Law 30's cascade — a removed entry takes its dependents: pending ones void (votes and
+ *  stakes refunded), accepted ones are orphan-struck with NO clawback (their authors weren't
+ *  wrong; their foundation vanished). */
+export function cascadeEntry(state: CoreState, entryId: string, notes: string[]) {
+  for (const id of Object.keys(state.acts).sort()) {
+    const dep = state.acts[id]
+    if (isDead(dep.status) || dep.id === entryId) continue
+    const touches =
+      ((dep.kind === "DEFINITION" || dep.kind === "LABEL") && dep.entryId === entryId) ||
+      (dep.kind === "EDGE" && (dep.fromEntryId === entryId || dep.toEntryId === entryId))
+    if (!touches) continue
+    const depKey = targetKey(dep.kind, dep.id)
+    if (dep.status === "PROVISIONAL") refundMarketVotes(state, depKey)
+    else dep.orphaned = true
+    refundOpenStakes(state, depKey, "BOTH")
+    dep.status = "REJECTED"
+    fxStatus("act-status", dep.id, dep.kind, "REJECTED")
+    freeName(state, dep)
+    voidContestsOn(state, dep, notes) // Amendment 17 Part P rider 1: only contests filed under the amendment
+    notes.push(`cascade ${dep.kind} ${dep.id}`)
+  }
+}
+
+/** Amendment 18 decision 66 (Law 18a): the escrow-out reason of the coins a market that ruled nothing returns. */
+export const NO_VERDICT_REFUND = "NO_VERDICT_REFUND"
+
+/**
+ * Amendment 18 decision 66 (Law 18a; keeper 2026-10-23): a sealed market that has ruled nothing after the recorded
+ * MARKET_ROUND_CAP rounds concludes without a verdict. Nobody was wrong, so it pays as a void does, not as a
+ * rejection: every judge's reputation returned untouched (no parimutuel), every coin stake refunded
+ * (NO_VERDICT_REFUND), no Law 25a debit, the name freed, the flags dropped without penalty; the act is REJECTED
+ * and marked `noVerdict`, and may be refiled as if never judged. The one filing's definition and a Law 39 collision
+ * edge follow the act, as they follow its verdict; an entry's dependents fall by Law 30's cascade. Called by the
+ * market's own round end, with the market already removed.
+ */
+export function concludeWithoutVerdict(state: CoreState, act: ActState, rounds: number, atSeq: number, notes: string[]) {
+  const follow = (dep: ActState, rule: string) => {
+    dep.status = "REJECTED"
+    dep.ruling = { status: "REJECTED", atSeq, rule }
+    dep.noVerdict = true
+    fxStatus("act-status", dep.id, dep.kind, "REJECTED")
+    delete state.flags[dep.id]
+    freeName(state, dep)
+    refundMarketVotes(state, targetKey(dep.kind, dep.id))
+    refundOpenStakes(state, targetKey(dep.kind, dep.id), "BOTH", { reason: NO_VERDICT_REFUND })
+  }
+  const rule = "quorum.v1.sealed.no-verdict"
+  follow(act, rule)
+  const collision = act.collisionWithEntryId ? state.acts[`collision:${act.id}`] : undefined
+  if (collision?.collisionParentId === act.id && collision.status === "PROVISIONAL") {
+    follow(collision, `${rule}.collision`)
+    notes.push(`collision edge ${collision.id} followed ${act.kind} ${act.id} — no verdict (Law 39)`)
+  }
+  const carried = act.kind === "ENTRY" && act.filingDefinitionId ? state.acts[act.filingDefinitionId] : undefined
+  if (carried?.filingParentId === act.id && carried.status === "PROVISIONAL") {
+    follow(carried, `${rule}.filing`)
+    notes.push(`DEFINITION ${carried.id} followed its filing, ENTRY ${act.id} — no verdict (Law 5; Amendment 17)`)
+  }
+  if (act.kind === "ENTRY") cascadeEntry(state, act.id, notes)
+  notes.push(`${act.kind} ${act.id} concluded without a verdict after ${rounds} rounds (Law 18a; Amendment 18) — every stake returned, no debit, free to refile`)
+}
+
+/** Strike a CONFIRMED act (upheld STRIKE challenge, court-ruled raid): flip off ACCEPTED with
+ *  exact clawback, free its name, cascade if it is an entry. Coin-market settlement is the
+ *  CALLER's move — who wins the pool depends on which door struck it. */
+export function strikeConfirmed(state: CoreState, act: ActState, atSeq: number, rule: string, notes: string[]) {
+  act.status = "REJECTED"
+  act.ruling = { status: "REJECTED", atSeq, rule }
+  fxStatus("act-status", act.id, act.kind, "REJECTED")
+  const clawed = clawbackAward(state, act, notes)
+  freeName(state, act)
+  if (act.kind === "ENTRY") cascadeEntry(state, act.id, notes)
+  notes.push(`struck ${act.kind} ${act.id} (clawback ${clawed} milli)`)
+}
+
+/** Law 30 REPLACE: the target is SUPERSEDED, not struck-to-nothing — exact clawback (its
+ *  author's act was ruled wrong), but NO cascade and NO name-freeing: the successor inherits
+ *  the web and the words. Teardown of dependents is the ladder's job. */
+export function supersedeReplaced(state: CoreState, act: ActState, succId: string, atSeq: number, rule: string, notes: string[]) {
+  fxStatus("act-status", act.id, act.kind, "SUPERSEDED")
+  act.status = "SUPERSEDED"
+  act.ruling = { status: "REJECTED", atSeq, rule } // how it resolved; the status says how it fell
+  act.supersededBy = succId
+  const clawed = clawbackAward(state, act, notes)
+  voidContestsOn(state, act, notes, "was superseded") // Amendment 18 decision 60: only contests filed under the amendment
+  notes.push(`superseded ${act.kind} ${act.id} → ${succId} (clawback ${clawed} milli)`)
+}
+
+/** The terminal ruling of a PROVISIONAL act and ALL its consequences, in the ruled order
+ *  (D1 spec 4): reward → vote settlement → coin settlement → cascade → the eating. Also the
+ *  seating path for REPLACE successors — one acceptance pipeline, no second copy. */
+export function ruleProvisionalAct(state: CoreState, act: ActState, status: "ACCEPTED" | "REJECTED", rule: string, atSeq: number, notes: string[]) {
+  act.status = status
+  act.ruling = { status, atSeq, rule }
+  fxStatus("act-status", act.id, act.kind, status)
+
+  if (status === "ACCEPTED") {
+    // Law 39 — an ACCEPTED name guards the door: the alias claims its word here, not at
+    // filing (row-F, 2026-08-15). PLURAL since the keeper's A+A ruling (2026-08-16): every
+    // accepted binding HOLDS — the word is a gem, and this is one more facet. The old
+    // "narrowed to one" clause is retired; live was always the truer mirror of Law 39 here.
+    if (act.kind === "LABEL" && act.nameNorm) {
+      claimName(state.names, act.nameNorm, act.id)
+    }
+    // The court key authors acts only through its own organs (a REPLACE it filed directly —
+    // dormant law today) and holds no actor row: an organ of the law takes no mint. Every
+    // OTHER unknown author still crashes the fold loudly, as it must.
+    const courtAuthored = act.authorFp === state.keys.court
+    const n = act.kind === "EDGE" ? sameTypeAcceptedEdges(state, act) : 0
+    const award = acceptanceRepMilli(state, act.kind, n)
+    if (award > 0n && !courtAuthored) {
+      state.actors[act.authorFp].repMilli += award
+      state.supply.repMintedMilli += award
+      act.awardedRepMilli = award
+      fxRep(act.authorFp)
+    }
+    const R = coinRewardBase(state, act.kind, n)
+    if (R > 0n && !courtAuthored) {
+      const settled = R / 4n // Amendment 5: mint the quarter, hold the rest
+      state.actors[act.authorFp].balanceBase += settled
+      fxCoinCredit(act.authorFp, settled, "ACT_ACCEPTANCE", `${act.kind}:${act.id}`)
+      state.supply.coinMintedBase += settled
+      act.holdback = { heldBase: R - settled, released: false }
+    }
+    if (act.kind === "EDGE" && !courtAuthored) payEdgeYield(state, act, notes)
+    penalizeFalseFlags(state, act, notes) // the crowd accepted it — whoever flagged it cried wolf
+  } else {
+    freeName(state, act)
+    delete state.flags[act.id] // a rejected act's flags were vindicated — no penalty, just done
+    // Law 25a (Amendment 15, payoff.v2): rejecting a PROVISIONAL act debits its author. The law is
+    // scoped to provisional acts, and this branch is the only place one is rejected by judgment
+    // (court or quorum). Striking or superseding an ACCEPTED act is a judgment too, but Law 25
+    // already prices that as the exact clawback of the award; it does not come through here.
+    // Voids, cascades and subsumptions never reach this branch either. Absent dial = 0 = the old rule.
+    const debit = payoffRuleVersion(state.dials) >= 2 ? dialBigOr(state.dials, "REJECTION_DEBIT_MILLI", 0n) : 0n
+    if (debit > 0n && act.authorFp !== state.keys.court) {
+      state.actors[act.authorFp].repMilli -= debit
+      state.supply.repBurnedMilli += debit
+      fxRep(act.authorFp)
+      notes.push(`rejection debited the author ${debit} milli (Law 25a)`)
+    }
+  }
+
+  // Law 39 collision petitions have ONE verdict and ONE market. The derived edge is the
+  // structural consequence of that verdict, not a second rewarded claim that can disagree
+  // with its parent. Only acts filed under the prospective protocol carry this marker; old
+  // recorded collision edges retain the rules under which they entered history.
+  const collision = act.collisionWithEntryId ? state.acts[`collision:${act.id}`] : undefined
+  if (collision?.collisionParentId === act.id && collision.status === "PROVISIONAL") {
+    collision.status = status
+    collision.ruling = { status, atSeq, rule: `${rule}.collision` }
+    fxStatus("act-status", collision.id, collision.kind, status)
+    delete state.flags[collision.id]
+    notes.push(`collision edge ${collision.id} followed ${act.kind} ${act.id} ${status} — no independent reward or market (Law 39)`)
+  }
+
+  // Amendment 17 Part K items 4 and 5 (Law 5): the one filing's definition follows the entry's verdict. On
+  // acceptance it is seated through this same acceptance path, its own award and its own holdback (Laws 14, 16,
+  // 21, 22), as an upheld REPLACE seats `succdef:`; on rejection it is REJECTED by the filing's verdict, not
+  // voided by the cascade, and the filing's author is debited once, above, for the entry (Law 25a).
+  const carried = act.kind === "ENTRY" && act.filingDefinitionId ? state.acts[act.filingDefinitionId] : undefined
+  if (carried?.filingParentId === act.id && carried.status === "PROVISIONAL") {
+    if (status === "ACCEPTED") {
+      ruleProvisionalAct(state, carried, "ACCEPTED", `${rule}.filing`, atSeq, notes)
+    } else {
+      carried.status = "REJECTED"
+      carried.ruling = { status: "REJECTED", atSeq, rule: `${rule}.filing` }
+      fxStatus("act-status", carried.id, carried.kind, "REJECTED")
+      delete state.flags[carried.id]
+      releaseSealedMarket(state, targetKey(carried.kind, carried.id))
+      settleMarketVotes(state, targetKey(carried.kind, carried.id), "REJECTED", softHardF(state))
+      settleOpenStakes(state, targetKey(carried.kind, carried.id), "REJECTED", notes)
+      notes.push(`${rule}.filing ruled DEFINITION ${carried.id} REJECTED with its filing, ENTRY ${act.id} — one debit (Law 25a; Amendment 17)`)
+    }
+  }
+
+  releaseSealedMarket(state, targetKey(act.kind, act.id)) // a ruling ends any open sealed round (Amendment 16, Part B)
+  settleMarketVotes(state, targetKey(act.kind, act.id), status, softHardF(state))
+  settleOpenStakes(state, targetKey(act.kind, act.id), status, notes)
+  if (status === "REJECTED" && act.kind === "ENTRY") cascadeEntry(state, act.id, notes)
+  // Law 11e — a newly accepted rung may make existing direct leaps derivable: they are eaten
+  if (status === "ACCEPTED" && act.kind === "EDGE" && act.edgeType === "INSTANCE_OF") subsumeLeaps(state, notes)
+
+  notes.push(`${rule} ruled ${act.kind} ${act.id} ${status}`)
+}
+
+/** Amendment 5's edge yield: an edge that lands on ATTESTED structure pays the yield twice over —
+ *  once to the writer for pointing at vouched-for ground, once to the attesters who vouched for it.
+ *  Both are MINTS (the chain records the attester half as ROYALTY blocks), so supply grows by both.
+ *
+ *  An endpoint counts as attested if it carries any live attestation, and each endpoint is counted
+ *  ONCE — a self-edge (from === to) names one endpoint, not two, which is why this dedupes rather
+ *  than looping the pair. Mirrors liveAttestedEntries' `distinct` in lib/chain.ts.
+ *
+ *  The attester split is the exact rational floor — `pool * amount / total` in BigInt, never a
+ *  float rounded afterwards — and a share that floors to nothing is not paid. Dust stays unminted.
+ *  This must match lib/escrow.ts payEdgeRoyalties base unit for base unit: the two are one rule,
+ *  and it was the reducer's silence about it that put 2.6 coins of drift into the first prod diff
+ *  that ever spanned an edge acceptance.
+ *
+ *  THE ATTESTER IS THE UNIT, NOT THE STAKE ROW: a holder's rows are summed before the division, so
+ *  the floor is taken once. The chain pays a recipient at most once per (entry, edge) anyway — the
+ *  dedup that made the row-wise version lose 86% of a pool on prod — and flooring once is also the
+ *  truer split, since a row is an accident of how the stake was placed, not a claim of its own. */
+function payEdgeYield(state: CoreState, edge: ActState, notes: string[]) {
+  const pool = dialBig(state.dials, "EDGE_YIELD_BASE")
+  if (pool <= 0n) return
+
+  const endpoints = [...new Set([edge.fromEntryId, edge.toEntryId].filter((id): id is string => !!id))]
+  let attestedEndpoints = 0
+  for (const entryId of endpoints) {
+    const open = (state.stakes[targetKey("ENTRY", entryId)] ?? []).filter(s => s.status === "OPEN" && s.side === "ATTEST")
+    const total = open.reduce((sum, s) => sum + s.amountBase, 0n)
+    if (total <= 0n) continue
+    attestedEndpoints++
+    const staked = new Map<string, bigint>()
+    for (const s of open) staked.set(s.fp, (staked.get(s.fp) ?? 0n) + s.amountBase)
+    for (const [fp, amount] of staked) {
+      const share = (pool * amount) / total
+      if (share < 1n) continue
+      state.actors[fp].balanceBase += share
+      fxCoinCredit(fp, share, "EDGE_ROYALTY", `EDGE:${edge.id}`)
+      state.supply.coinMintedBase += share
+    }
+  }
+  if (!attestedEndpoints) return
+
+  const writerBonus = pool * BigInt(attestedEndpoints)
+  state.actors[edge.authorFp].balanceBase += writerBonus
+  fxCoinCredit(edge.authorFp, writerBonus, "EDGE_WRITER_YIELD", `EDGE:${edge.id}`)
+  state.supply.coinMintedBase += writerBonus
+  notes.push(`edge yield: ${attestedEndpoints} attested endpoint(s) — writer and attesters both paid`)
+}
+
+export function sameTypeAcceptedEdges(state: CoreState, edge: ActState): number {
+  let n = 0
+  for (const id of Object.keys(state.acts)) {
+    const a = state.acts[id]
+    if (a.kind === "EDGE" && a.status === "ACCEPTED" && a.id !== edge.id && a.toEntryId === edge.toEntryId && a.edgeType === edge.edgeType) n++
+  }
+  return n
+}
+
+/** The false-flag cost: an act the crowd accepts was NOT incoherent — everyone still flagging
+ *  it is debited (what keeps the flag from being a free weapon). */
+function penalizeFalseFlags(state: CoreState, act: ActState, notes: string[]) {
+  const flags = state.flags[act.id]
+  if (!flags) return
+  const cost = dialBig(state.dials, "FALSE_FLAG_COST_MILLI")
+  for (const fp of Object.keys(flags).sort()) {
+    state.actors[fp].repMilli -= cost
+    fxRep(fp)
+    state.supply.repBurnedMilli += cost
+  }
+  notes.push(`${Object.keys(flags).length} false flags penalized`)
+  delete state.flags[act.id]
+}
+
+/** Law 11e-2, the eating: retire every live INSTANCE_OF leap derivable through the REST of
+ *  the accepted ladder. No penalty, awards kept, markets refunded — better structure merely
+ *  retired a true claim. */
+export function subsumeLeaps(state: CoreState, notes: string[]) {
+  // The ladder graph is built ONCE and then maintained. It used to be rebuilt inside the loop —
+  // a full sorted scan of every act, per candidate edge — so one edge acceptance cost a sorted
+  // pass over 18k acts for each of 2.4k INSTANCE_OF edges: ~23 SECONDS per ruling, which is what
+  // made the nightly fold take longer than the day it was measuring.
+  //
+  // Two changes make it equivalent rather than merely similar. The candidate's self-exclusion
+  // moves into ladderVia, which refuses to traverse that edge (identical to a graph built without
+  // it). And the one thing the loop genuinely changes about the graph — a subsumed edge stops
+  // being a rung for later candidates — is applied as it happens, in place, preserving order.
+  // Same build order, same list order after a removal, so the fold yields byte-identical state.
+  // A speedup that changed the answer would not be a speedup; it would be an unratified
+  // amendment, which is why this landed behind a hash check against the real prod log.
+  const adj = instanceAdjacency(state)
+  for (const id of Object.keys(state.acts).sort()) {
+    const e = state.acts[id]
+    if (e.kind !== "EDGE" || e.edgeType !== "INSTANCE_OF" || isDead(e.status)) continue
+    const via = ladderVia(adj, e.fromEntryId!, e.toEntryId!, e.id)
+    if (!via) continue
+    const key = targetKey("EDGE", e.id)
+    if (e.status === "PROVISIONAL") refundMarketVotes(state, key)
+    else e.orphaned = true // accepted leap: award kept, coins kept
+    refundOpenStakes(state, key, "BOTH")
+    e.status = "REJECTED"
+    e.subsumedVia = via
+    // ...and SAY SO on the effects trace. Every other status change here announces itself;
+    // this one did not, so the fold struck the edge and the row kept saying PENDING — invisible
+    // until an INSTANCE_OF acceptance finally made a leap derivable on prod (seq 670,
+    // 2026-08-18) and the diff read 1. The replay test could never catch it: both sides of that
+    // comparison reproduce the same missing write. Only fold-vs-rows sees a projection gap.
+    // Safe for replay by construction — fx is never hashed and never validated, so adding one
+    // changes what the projector HEARS, never what the fold DECIDES.
+    fxStatus("act-status", e.id, e.kind, "REJECTED")
+    dropEdge(adj, e.fromEntryId!, e.id) // struck: no longer a rung for the candidates after it
+    voidContestsOn(state, e, notes, "was subsumed (Law 11e)") // Amendment 18 decision 60: only contests filed under the amendment
+    notes.push(`subsumed EDGE ${e.id} via ${via} (Law 11e)`)
+  }
+}

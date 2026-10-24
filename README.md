@@ -77,7 +77,7 @@ factual accuracy.
 
 The current bundled core hashes to:
 
-    4482e35e9efcd9ed2f6462108ae83138c0b5c82c8049a605937de7b9e8afbaaf
+    db8c6f501402fbb3ae14a63f9632331a3b2cf9021516a5452cd980541cfd57b2
 
 Compare this value with `pin.codeHash` in a published `manifest.json`. A different hash is not
 automatically a failure: the record can span multiple rulesets, and the verifier retains

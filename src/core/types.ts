@@ -238,6 +238,7 @@ export interface ActState {
   orphaned?: boolean // struck by cascade/collision/subsumption — author keeps the award (Law 30)
   canonical?: boolean // a CANONICAL label imported from prod — an implementation row, not an EVENTS act (the diff skips it)
   subsumedVia?: string // Law 11e — the rung that made this leap derivable
+  noVerdict?: true // Amendment 18 decision 66 (Law 18a) — its sealed market reached MARKET_ROUND_CAP without ruling: REJECTED without a verdict, every stake returned, no debit, free to refile
   supersededBy?: string // Law 30 REPLACE — the successor that took its place
   // Law 39 collision petition (prospective from the 2026-09-03 keeper ruling). A held word
   // does not become a second ordinary market merely because the filer supplied a password.
@@ -325,9 +326,14 @@ export interface Attestation {
 /** Amendment 16 Part B — a sealed act market's open round (see core/sealed.ts). */
 export interface SealedMarket {
   phase: "COMMIT" | "REVEAL"
-  phaseTs: string
+  phaseTs: string // while COMMIT: when this round opened (the fact that ended the last); while REVEAL: when the reveal opened
   round: number
   commits: Record<string, { hash: string; stakeMilli: bigint; ts: string }> // judge fp → this round's sealed commitment
+  // Amendment 18 decision 61 (Law 18a) — a round after the first that OPENED under the amendment (stamped at its
+  // opening only then, so no earlier state hash moves): its reveal opens on this round's commitments alone, or once
+  // every standing judge has re-committed or passed (REVEAL_WINDOW_MS from phaseTs). Absent: the round opens its
+  // reveal as Law 18a read before — standing positions count toward the bar.
+  freshReveal?: true
 }
 
 /** Amendment 16 Part A — a system governance has named to attest outside facts. */
@@ -394,6 +400,10 @@ export interface Challenge {
   // Amendment 17 Part P rider 1 — filed under the amendment: if its target falls with its entry (Law 30's cascade, or a
   // replaced entry's teardown) while it is live, it concludes VOID in the same ruling. Absent: it runs on, as filed.
   voidsWithTarget?: true
+  // Amendment 18 decision 60 (Law 30) — filed under the amendment (implies voidsWithTarget): its target's fall by ANY
+  // path — subsumed under Law 11e, superseded by another ruling — voids it in the same fact, not only the cascade and
+  // the teardown. Absent: only Part P rider 1's two paths, as filed.
+  voidsOnAnyFall?: true
   authorFp: string
   status: "PENDING" | "ACCEPTED" | "REJECTED" | "EXPIRED" | "VOID" // EXPIRED since payoff.v2 (Law 31e); VOID, Part P rider 1
   filedSeq: number
@@ -424,7 +434,12 @@ export interface Raid {
   openedTs?: string // Law 31e clock while SCREEN (payoff.v2)
   parkedTs?: string // Law 31e clock once parked (payoff.v2)
   v2?: ScreenV2
+  // Amendment 18 decision 64 (Law 24) — opened under the amendment: a raid that fails (dismissed at the screen, or the
+  // act upheld by the court) returns the raiders' coins and leaves every attestation open, so the act stays attested
+  // for Law 31's routing. Absent: the attesters win the raid pool and every stake on the act settles, as before.
+  refundsRaiders?: true
   voidsWithTarget?: true // Amendment 17 Part P rider 1: opened under the amendment (see Challenge.voidsWithTarget)
+  voidsOnAnyFall?: true // Amendment 18 decision 60: opened under the amendment (see Challenge.voidsOnAnyFall)
 }
 
 export interface Supply {

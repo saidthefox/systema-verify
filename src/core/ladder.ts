@@ -3,7 +3,7 @@ import { EDGE_TYPES, RAID_LIVE, RETIRED_EDGE_TYPES, isDead, targetKey, claimName
 import { nameShapeErrorV16, sha256 } from "./canonical"
 import { nameNorm } from "./names"
 import { LIMITS, firstTooLong } from "./limits"
-import { CORRECT_AWARD_BASE, CORRECT_AWARD_REP_MILLI, amendment16Version, amendment17Version, dialBig, dialBool, dialNum, dialNumOr, payoffRuleVersion } from "./dials"
+import { CORRECT_AWARD_BASE, CORRECT_AWARD_REP_MILLI, amendment16Version, amendment17Version, amendment18Version, dialBig, dialBool, dialNum, dialNumOr, payoffRuleVersion } from "./dials"
 import {
   CORRECT_UPHELD, CORRECT_UPHELD_REFUND, correctionPartsFor, correctionValueError, definitionPartHashes, entryPartHashes,
   partHash, restoresReplacedValue, standingPartHash,
@@ -14,7 +14,7 @@ import { acceptedDefinitionHead, definitionPartsA17, examplesError, nextDefiniti
 import { drawJury, drawSeed, eligibleJurors, jurySize, nextSeed } from "./sortition"
 import {
   freeName, fxActSync, fxCoinCredit, fxCoinDebit, fxRep, fxStatus, refundMarketVotes, refundOpenStakes, ruleProvisionalAct, settleMarketVotes,
-  settleOpenStakes, softHardF, strikeConfirmed, supersedeReplaced, voidContestsOn,
+  CONTEST_VOID_REFUND, RAID_FAILED_REFUND, settleOpenStakes, softHardF, strikeConfirmed, supersedeReplaced, voidContestsOn,
 } from "./effects"
 
 /**
@@ -319,7 +319,9 @@ export function applyContest(state: CoreState, e: EventEnvelope, notes: string[]
       if (payoffRuleVersion(state.dials) >= 2) raid.openedTs = e.ts // Law 31e clock
       if (screenV2Active(state)) raid.v2 = { phase: "JURY", phaseTs: e.ts }
       if (amendment17Version(state.dials) >= 1) raid.voidsWithTarget = true // Part P rider 1, read at the raid's opening
+      if (amendment18Version(state.dials) >= 1) raid.voidsOnAnyFall = true // Amendment 18 decision 60, read at the opening
       state.raids[raid.id] = raid
+      if (amendment18Version(state.dials) >= 1) raid.refundsRaiders = true // Amendment 18 decision 64, read at the opening
       notes.push(`raid opened ${raid.id}`)
     } else {
       notes.push(`raid joined ${raid.id}`)
@@ -349,6 +351,7 @@ export function applyContest(state: CoreState, e: EventEnvelope, notes: string[]
       // Part O item 4: a correction touches no attestation, so it stamps no author's refund
       ...(amendment17Version(state.dials) >= 1 && !correcting ? { authorAttestRefund: true as const } : {}),
       ...(amendment17Version(state.dials) >= 1 ? { voidsWithTarget: true as const } : {}), // Part P rider 1
+      ...(amendment18Version(state.dials) >= 1 ? { voidsOnAnyFall: true as const } : {}), // Amendment 18 decision 60
     }
     if (screenV2Active(state)) c.v2 = { phase: "JURY", phaseTs: e.ts } // the draw waits for the clock
     state.challenges[c.id] = c
@@ -358,28 +361,47 @@ export function applyContest(state: CoreState, e: EventEnvelope, notes: string[]
 
 // ── screen votes (targetType CHALLENGE | RAID) ──────────────────────────────
 
+/** Amendment 18 decision 60 (Law 30): does a contest's target still stand? Read under the amendment at every door that
+ *  could uphold the contest — the court's, the screen's — so a contest live on an act that fell by a path its own
+ *  stamp did not void (one filed before the amendment) strikes nothing twice. Null when it stands. */
+export function targetFallen(state: CoreState, contest: Pick<Challenge, "targetId">): string | null {
+  const act = state.acts[contest.targetId]
+  if (!act) return "its target is not in the record"
+  return act.status === "ACCEPTED" ? null : `its target no longer stands (${act.status})`
+}
+
 export function validateScreenVote(state: CoreState, actorFp: string, tt: string, tid: string): string | null {
   const judge = state.actors[actorFp]
   if (judge.entityType === "agent" && !dialBool(state.dials, "CONTEST_AGENTS_OPEN")) {
     return "contest screens are not yet open to agents (Law 31 dial)"
   }
+  const v18 = amendment18Version(state.dials) >= 1
   if (tt === "CHALLENGE") {
     const c = state.challenges[tid]
     if (!c) return "no such contest"
     if (c.status !== "PENDING") return `this contest is already resolved (${c.status})`
+    // Amendment 18 decision 60: no vote lands on a contest whose target has fallen; it voids, lapses or is dismissed
+    const fallen = v18 ? targetFallen(state, c) : null
+    if (fallen) return `this contest ${fallen} — nothing is left to judge (Law 30; Amendment 18)`
     const stale = staleDefinitionHead(state, c)
     if (stale) return `this challenge is stale against definition ${stale.id} — rebase it before asking jurors to vote`
     if (c.parked) return "this screen is parked for the court (Law 31b-ii) — no further votes land"
     if (c.v2) return "this is a SEALED screen (screen.v2) — jurors VOTE_COMMIT, then VOTE_REVEAL"
     if (c.authorFp === actorFp) return "you cannot judge your own contest (Law 15)"
+    // Amendment 18 decision 63 (Law 15): the target's author does not judge the contest of their own act
+    if (v18 && state.acts[c.targetId]?.authorFp === actorFp) return "you cannot judge the contest of your own act (Law 15; Amendment 18)"
     return null
   }
   const r = state.raids[tid]
   if (!r) return "no such raid"
   if (r.status !== "SCREEN") return "this raid is past the screening stage"
+  const fallen = v18 ? targetFallen(state, r) : null // decision 60
+  if (fallen) return `this raid ${fallen} — nothing is left to judge (Law 30; Amendment 18)`
   if (r.parked) return "this screen is parked for the court (Law 31b-ii) — no further votes land"
   if (r.v2) return "this is a SEALED screen (screen.v2) — jurors VOTE_COMMIT, then VOTE_REVEAL"
   if (r.openedByFp === actorFp) return "you cannot judge your own raid (Law 15)"
+  // decision 63: the author is barred; the act's attesters are not — their coins are what the raid attacks
+  if (v18 && state.acts[r.targetId]?.authorFp === actorFp) return "you cannot judge the raid on your own act (Law 15; Amendment 18)"
   return null
 }
 
@@ -459,6 +481,17 @@ export function evaluateRaidScreen(state: CoreState, raid: Raid, e: EventEnvelop
  *  REPLACE cannot materialize — the contest then stays PENDING for the court, exactly prod's
  *  failed-swap-leaves-it-pending semantics, and the vote market stays open. */
 export function executeChallengeRuling(state: CoreState, c: Challenge, verdict: "ACCEPTED" | "REJECTED", rule: string, atSeq: number, notes: string[]): boolean {
+  if (verdict === "ACCEPTED" && amendment18Version(state.dials) >= 1) {
+    // Amendment 18 decision 60 (Law 30): a contest is not upheld against an act that no longer stands. The court's
+    // door and the screen's refuse it first; should a crossing still reach here, the contest concludes VOID — its
+    // burn refunded, its judges' stakes returned — rather than striking the dead act again.
+    const fallen = targetFallen(state, c)
+    if (fallen) {
+      voidFallenContest(state, c, notes)
+      notes.push(`challenge ${c.id} VOID — ${fallen} (Law 30; Amendment 18); market refunded`)
+      return true
+    }
+  }
   if (verdict === "ACCEPTED") {
     const stale = staleDefinitionHead(state, c)
     if (stale) {
@@ -534,6 +567,24 @@ export function executeChallengeRuling(state: CoreState, c: Challenge, verdict: 
   settleMarketVotes(state, targetKey("CHALLENGE", c.id), verdict, softHardF(state))
   notes.push(`challenge ${c.id} ${verdict === "ACCEPTED" ? "UPHELD" : "DISMISSED"}`)
   return true
+}
+
+/** Amendment 18 decision 60: a challenge concludes VOID at a ruling door because its target has fallen — paid as
+ *  Part P rider 1 pays a void (effects.ts voidContestsOn): the screen refunded, the filing burn refunded by
+ *  compensation (CONTEST_VOID_REFUND), no award, nothing clawed back. */
+function voidFallenContest(state: CoreState, c: Challenge, notes: string[]) {
+  refundMarketVotes(state, targetKey("CHALLENGE", c.id))
+  const burn = state.burns[String(c.filedSeq)]
+  if (burn && !burn.compensated) {
+    if (burn.fp !== c.authorFp) throw new Error(`challenge ${c.id}: burn at seq ${c.filedSeq} belongs to ${burn.fp}, not its author ${c.authorFp}`)
+    state.actors[burn.fp].balanceBase += burn.amountBase
+    fxCoinCredit(burn.fp, burn.amountBase, CONTEST_VOID_REFUND, c.id)
+    state.supply.coinMintedBase += burn.amountBase // the refund mints exactly what the filing burned
+    burn.compensated = true
+    notes.push(`challenge ${c.id}: filing stake refunded`)
+  }
+  c.status = "VOID"
+  fxStatus("screen-status", c.id, "CHALLENGE", "VOID")
 }
 
 /** Can an upheld correction be applied now? Its target still standing and, for a definition, still the head. Read at
@@ -925,12 +976,25 @@ function teardownReplacedEntry(state: CoreState, c: Challenge, old: ActState, su
   }
 }
 
+/** Amendment 18 decision 64 (Law 24): a raid opened under the amendment that fails returns the raiders' coins
+ *  (RAID_FAILED_REFUND) and leaves every attestation open, so the act stays attested and keeps its route (Law 31).
+ *  Before it: the attesters win the raid pool and every stake on the act settles. */
+function settleFailedRaid(state: CoreState, raid: Raid, notes: string[]) {
+  const tkey = targetKey(raid.targetType, raid.targetId)
+  if (raid.refundsRaiders) {
+    const returned = refundOpenStakes(state, tkey, "RAID", { reason: RAID_FAILED_REFUND })
+    notes.push(`raid ${raid.id} failed — ${returned} base returned to the raiders; the attestations stand (Law 24; Amendment 18)`)
+  } else {
+    settleOpenStakes(state, tkey, "ACCEPTED", notes) // the attesters win the raid pool
+  }
+}
+
 function executeRaidDismissal(state: CoreState, raid: Raid, notes: string[]) {
   raid.status = "DISMISSED"
   fxStatus("screen-status", raid.id, "RAID", "DISMISSED")
-  // frivolous raid: raiders forfeit to the attesters; the screen settles HARD against STRIKE…
+  // frivolous raid: raiders forfeit to the attesters (under Amendment 18, are refunded); the screen settles HARD
   // against ADVANCE voters — the raid was the hard layer and they backed it.
-  settleOpenStakes(state, targetKey(raid.targetType, raid.targetId), "ACCEPTED", notes)
+  settleFailedRaid(state, raid, notes)
   settleMarketVotes(state, targetKey("RAID", raid.id), "REJECTED", 1000n)
   notes.push(`raid ${raid.id} DISMISSED`)
 }
@@ -979,7 +1043,7 @@ export function executeRaidRuling(state: CoreState, raid: Raid, verdict: "STRUCK
     settleOpenStakes(state, tkey, "REJECTED", notes) // the raiders win the attester pool
     settleMarketVotes(state, targetKey("RAID", raid.id), "ACCEPTED", 1000n) // early rulings settle leftover screen votes
   } else {
-    settleOpenStakes(state, tkey, "ACCEPTED", notes) // the attesters win the raid pool
+    settleFailedRaid(state, raid, notes) // the attesters win the raid pool — or, under Amendment 18, keep their positions
     settleMarketVotes(state, targetKey("RAID", raid.id), "REJECTED", 1000n)
   }
   notes.push(`raid ${raid.id} ${verdict}`)

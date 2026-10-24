@@ -1,5 +1,5 @@
 import type { CoreState, OpenVote, Stake, VoteDir } from "./types"
-import { dialBig, dialNum } from "./dials"
+import { amendment18Version, dialBig, dialNum } from "./dials"
 
 /**
  * Consensus math — integer only (D1 spec 1). No float ever touches a ruling: supermajority is
@@ -102,7 +102,15 @@ export function quorumCrossing(state: CoreState, votes: Record<string, OpenVote>
   if (total < BigInt(minJudges) * 1000n) return null
   // 2/3 supermajority, cross-multiplied: A/total ≥ 2/3  ⇔  3A ≥ 2·total
   const status = 3n * A >= 2n * total ? "ACCEPTED" : 3n * S >= 2n * total ? "REJECTED" : null
-  return status ? { status, advanceMilli: A, strikeMilli: S } : null
+  if (!status) return null
+  // Amendment 18 decision 62 (Law 18; keeper 2026-10-23, option b): a ruling needs at least two distinct judges with
+  // positive stake on the winning side. A lone stake, whatever its weight, rules nothing — the market stays open
+  // (a sealed market re-opens for another round; a screen waits for more votes). Weight and payout are unchanged.
+  if (amendment18Version(state.dials) >= 1) {
+    const winDir: VoteDir = status === "ACCEPTED" ? "ADVANCE" : "STRIKE"
+    if (voters.filter(fp => votes[fp].dir === winDir && votes[fp].stakeMilli > 0n).length < 2) return null
+  }
+  return { status, advanceMilli: A, strikeMilli: S }
 }
 
 // ── Laws 19/19a/27 + A7 — the reputation parimutuel ─────────────────────────

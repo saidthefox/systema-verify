@@ -3,7 +3,7 @@ import { EDGE_TYPES, RAID_LIVE, RETIRED_EDGE_TYPES, claimName, isDead, nameHolde
 import { CHAIN_TERMINUS_ACT_HASH, CHAIN_TERMINUS_ACT_ID, hashOf, keyFingerprint, sha256 } from "./canonical"
 import { nameNorm, nameShape } from "./names"
 import { LIMITS, firstTooLong } from "./limits"
-import { GENESIS_DIALS, amendment16Version, amendment17Version, assertDialPolicy, dialBig, dialBool, dialNum, dialPolicyError, forgeMinimumWhole, payoffRuleVersion } from "./dials"
+import { GENESIS_DIALS, amendment16Version, amendment17Version, amendment18Version, assertDialPolicy, dialBig, dialBool, dialNum, dialPolicyError, forgeMinimumWhole, payoffRuleVersion } from "./dials"
 import { activeJudges, lineageOnlyAgentFps, medianActiveRepMilli, quorumCrossing } from "./math"
 import { examplesError, liveDefinitionFor, nextDefinitionVersion, trailerError } from "./definitions"
 import { beginFx, cascadeEntry, fxCoinCredit, fxCoinDebit, fxStatus, refundMarketVotes, refundOpenStakes, ruleProvisionalAct, takeFx } from "./effects"
@@ -25,7 +25,7 @@ import { actJudgmentError, applyActCommit, applyActReveal, isActMarket, sealedAc
 import {
   applyCommit, applyContest, applyContestRebase, applyReveal, correctionFeasible, evaluateChallengeScreen, evaluateRaidScreen,
   executeChallengeRuling, executeRaidRuling, expireStaleCoalitions, replaceFeasible,
-  staleDefinitionHead, sweepScreens, sweepScreensV2, validateCommit, validateContest, validateContestRebase, validateReveal, validateScreenVote,
+  staleDefinitionHead, sweepScreens, sweepScreensV2, targetFallen, validateCommit, validateContest, validateContestRebase, validateReveal, validateScreenVote,
 } from "./ladder"
 import { FORGE_PROOF_V3, applyIngotForged, applyIngotMelted, validateIngotForged, validateIngotMelted } from "./forge-receipts"
 
@@ -767,6 +767,11 @@ export function validate(state: CoreState, e: Pick<EventEnvelope, "kind" | "v" |
         if (!c) return "no such contest"
         if (c.status !== "PENDING") return `already resolved: ${c.status}`
         if (ruling !== "ACCEPTED" && ruling !== "REJECTED") return "challenge ruling must be ACCEPTED (upheld) or REJECTED (dismissed)"
+        if (ruling === "ACCEPTED" && amendment18Version(state.dials) >= 1) {
+          // Amendment 18 decision 60 (Law 30): the court does not uphold a contest whose target no longer stands
+          const fallen = targetFallen(state, c)
+          if (fallen) return `the contest ${fallen} — the court does not uphold it (Law 30; Amendment 18)`
+        }
         if (ruling === "ACCEPTED") {
           const stale = staleDefinitionHead(state, c)
           if (stale) return `challenge is stale against definition ${stale.id} — rebase and rejudge before upholding it`
@@ -785,6 +790,10 @@ export function validate(state: CoreState, e: Pick<EventEnvelope, "kind" | "v" |
         const r = state.raids[tid]
         if (!r) return "no such raid"
         if (!RAID_LIVE.includes(r.status)) return `raid already finished: ${r.status}`
+        if (ruling === "STRUCK" && amendment18Version(state.dials) >= 1) {
+          const fallen = targetFallen(state, r) // decision 60: the court strikes nothing twice
+          if (fallen) return `the raid ${fallen} — the court does not strike it again (Law 30; Amendment 18)`
+        }
         return ruling === "STRUCK" || ruling === "UPHELD" ? null : "raid verdict must be STRUCK or UPHELD (Law 24)"
       }
       const act = state.acts[tid]

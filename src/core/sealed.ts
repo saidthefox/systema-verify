@@ -1,11 +1,11 @@
 import type { CoreState, EventEnvelope, SealedMarket } from "./types"
 import { targetKey } from "./types"
-import { amendment16Version, dialBig, dialNum } from "./dials"
+import { MARKET_ROUND_CAP, amendment16Version, amendment18Version, dialBig, dialNum, dialNumOr } from "./dials"
 import { activeJudges, lineageOnlyAgentFps, quorumCrossing, quorumMinJudges } from "./math"
 import { liveDefinitionFor } from "./definitions"
 import { LIMITS, firstTooLong } from "./limits"
 import { commitHashOf } from "./ladder"
-import { fxRep, ruleProvisionalAct } from "./effects"
+import { concludeWithoutVerdict, fxRep, ruleProvisionalAct } from "./effects"
 
 /**
  * Amendment 16 Part B (Laws 18–19): judgments on acts are sealed. A judge commits to a hidden
@@ -27,6 +27,15 @@ import { fxRep, ruleProvisionalAct } from "./effects"
  * revealed in an earlier round are on the record, as every recorded fact is.
  *
  * A ruling by any other path (the court, a cascade, a void) releases open commitments in full.
+ *
+ * Amendment 18 decision 61 (Law 18a; keeper 2026-10-23), for a round after the first that OPENED under the
+ * amendment (`freshReveal`, stamped at the round's opening): the reveal opens when the judges committed in THIS
+ * round reach the bar, or when every judge holding a standing position has re-committed or passed; a standing
+ * judge who has not re-committed within REVEAL_WINDOW_MS of the round's opening (`phaseTs` while COMMIT: the ts
+ * of the fact that ended the last round, a reveal or a TICK) has passed. If they have all passed and nobody
+ * committed, the reveal opens on nothing and the round ends at once. Standing positions still count toward the
+ * ruling. A market open at activation finishes its current round as Law 18a read before, and takes the round
+ * rule from its next.
  */
 
 export const isActMarket = (targetType: string | null): boolean =>
@@ -88,7 +97,7 @@ export function applyActCommit(state: CoreState, e: EventEnvelope, notes: string
   judge.openStakeMilli += stake
   judge.lastVoteTs = e.ts // a sealed judgment is a judgment cast (Law 18's judging population)
   notes.push(`sealed commitment ${Object.keys(market.commits).length} in round ${market.round} (Amendment 16, Part B)`)
-  openRevealIfReady(state, key, market, e.ts, notes)
+  openRevealIfReady(state, key, market, e, notes)
 }
 
 export function validateActReveal(state: CoreState, e: Pick<EventEnvelope, "actor" | "payload">): string | null {
@@ -137,13 +146,42 @@ function positionedJudges(state: CoreState, key: string, market: SealedMarket): 
   return fps.size
 }
 
-function openRevealIfReady(state: CoreState, key: string, market: SealedMarket, ts: string, notes: string[]) {
-  if (market.phase !== "COMMIT" || !Object.keys(market.commits).length) return
-  const bar = quorumMinJudges(activeJudges(state, ts), dialNum(state.dials, "QUORUM_FLOOR"), dialNum(state.dials, "QUORUM_CEILING"))
+/** Amendment 18 decision 61: the judges holding a standing position (revealed in an earlier round) that the bar
+ *  counts, and the judges committed in this round that it counts. */
+function roundJudges(state: CoreState, key: string, market: SealedMarket): { standing: string[]; fresh: number } {
+  const outside = lineageOnlyAgentFps(state)
+  const standing = Object.entries(state.votes[key] ?? {}).filter(([fp, v]) => v.stakeMilli > 0n && !outside.has(fp)).map(([fp]) => fp)
+  const fresh = Object.entries(market.commits).filter(([fp, c]) => c.stakeMilli > 0n && !outside.has(fp)).length
+  return { standing, fresh }
+}
+
+function openRevealIfReady(state: CoreState, key: string, market: SealedMarket, e: Pick<EventEnvelope, "seq" | "ts">, notes: string[]) {
+  if (market.phase !== "COMMIT") return
+  const sealed = Object.keys(market.commits).length
+  const bar = quorumMinJudges(activeJudges(state, e.ts), dialNum(state.dials, "QUORUM_FLOOR"), dialNum(state.dials, "QUORUM_CEILING"))
+  if (market.freshReveal) {
+    // Amendment 18 decision 61: this round's commitments reach the bar, or every standing judge has re-committed or
+    // passed — passed once REVEAL_WINDOW_MS has run from the round's opening without their commitment.
+    const { standing, fresh } = roundJudges(state, key, market)
+    const passed = Date.parse(e.ts) - Date.parse(market.phaseTs) >= dialNum(state.dials, "REVEAL_WINDOW_MS")
+    const everyStanding = standing.length > 0 && standing.every(fp => market.commits[fp] || passed)
+    if (fresh < bar && !everyStanding) return
+    if (!sealed) {
+      // every standing judge passed and nobody committed: the reveal opens on nothing, so the round ends now
+      notes.push(`${key}: every standing judge passed and no one committed in round ${market.round} — the round ends on its standing positions (Law 18a; Amendment 18)`)
+      endRound(state, key, market, e, notes)
+      return
+    }
+    market.phase = "REVEAL"
+    market.phaseTs = e.ts
+    notes.push(`${key}: ${sealed} sealed in round ${market.round}, ${fresh >= bar ? `the bar of ${bar} judges is met on this round's commitments` : "every standing judge has re-committed or passed"} — the reveal opens (Law 18a; Amendment 18)`)
+    return
+  }
+  if (!sealed) return
   if (positionedJudges(state, key, market) < bar) return
   market.phase = "REVEAL"
-  market.phaseTs = ts
-  notes.push(`${key}: ${Object.keys(market.commits).length} sealed, the bar of ${bar} judges is met — the reveal opens`)
+  market.phaseTs = e.ts
+  notes.push(`${key}: ${sealed} sealed, the bar of ${bar} judges is met — the reveal opens`)
 }
 
 /** The round ends: forfeit what stayed sealed, judge what was revealed, rule or open the next round. */
@@ -169,9 +207,19 @@ function endRound(state: CoreState, key: string, market: SealedMarket, e: Pick<E
     ruleProvisionalAct(state, state.acts[tid], crossing.status, `quorum.v${ver}.sealed`, e.seq, notes)
     return
   }
+  // Amendment 18 decision 66 (Law 18a): a market that has ruled nothing after MARKET_ROUND_CAP rounds (the dial present)
+  // concludes without a verdict instead of re-opening (effects.ts concludeWithoutVerdict); absent, no cap, as before
+  const cap = amendment18Version(state.dials) >= 1 ? dialNumOr(state.dials, MARKET_ROUND_CAP, 0) : 0
+  if (cap > 0 && market.round >= cap) {
+    delete state.sealed![key]
+    notes.push(`${key}: round ${market.round} revealed no crossing and the cap of ${cap} rounds is reached — no verdict (Law 18a; Amendment 18)`)
+    concludeWithoutVerdict(state, state.acts[tid], market.round, e.seq, notes)
+    return
+  }
   market.round += 1
   market.phase = "COMMIT"
   market.phaseTs = e.ts
+  if (amendment18Version(state.dials) >= 1) market.freshReveal = true // Amendment 18 decision 61, read at the round's opening
   notes.push(`${key}: round ${market.round - 1} revealed no crossing — the market stays open (round ${market.round})`)
 }
 
@@ -181,7 +229,7 @@ export function sweepSealedMarkets(state: CoreState, tick: EventEnvelope, notes:
   for (const key of Object.keys(state.sealed).sort()) {
     const market = state.sealed[key]
     if (!market) continue // ruled within this sweep: a struck entry cascades to its dependents' markets
-    if (market.phase === "COMMIT") openRevealIfReady(state, key, market, tick.ts, notes)
+    if (market.phase === "COMMIT") openRevealIfReady(state, key, market, tick, notes)
     else if (Date.parse(tick.ts) - Date.parse(market.phaseTs) >= dialNum(state.dials, "REVEAL_WINDOW_MS")) {
       endRound(state, key, market, tick, notes)
     }
